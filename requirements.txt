@@ -1,0 +1,8 @@
+# Local client dependencies only
+# For calling the deployed Modal service via HTTP
+modal>=1.0.0
+requests>=2.31.0
+requests>=2.31.0
+ebooklib>=0.18
+beautifulsoup4>=4.12.0
+pypdf>=4.0.0
