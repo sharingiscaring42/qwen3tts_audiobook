@@ -34,8 +34,12 @@ def load_env(path: str = ".env") -> dict:
 
 _env = load_env()
 
+USE_LOCAL = False
+
 # Your Modal endpoint URL (get this from `modal deploy` output)
 ENDPOINT_URL = _env.get("ENDPOINT_URL", "https://your-endpoint.modal.run")
+LOCAL_ENDPOINT_URL = _env.get("LOCAL_ENDPOINT_URL", "http://localhost:8000/generate")
+ACTIVE_ENDPOINT_URL = LOCAL_ENDPOINT_URL if USE_LOCAL else ENDPOINT_URL
 
 # Path to your reference audio file (WAV format recommended, 3-10 seconds)
 # This is the voice you want to clone
@@ -71,7 +75,7 @@ def read_text_file(path: str) -> str:
         return f.read().strip()
 
 
-def clone_voice():
+def clone_voice(endpoint_url: str):
     """
     Clone voice using the configuration above.
     Run this function after editing the CONFIG section.
@@ -79,7 +83,7 @@ def clone_voice():
     print("=" * 60)
     print("Qwen3 TTS Voice Cloning Client (Editable)")
     print("=" * 60)
-    print(f"\nEndpoint: {ENDPOINT_URL}")
+    print(f"\nEndpoint: {endpoint_url}")
     print(f"Reference audio: {REFERENCE_AUDIO_PATH}")
     print(f"Reference text file: {REFERENCE_TEXT_PATH}")
     print(f"Language: {LANGUAGE}")
@@ -127,14 +131,14 @@ def clone_voice():
     }
     
     # Send request
-    print(f"\nSending request to Modal endpoint...")
+    print(f"\nSending request to endpoint...")
     print(f"This may take 30-60 seconds on cold start, or 5-10 seconds if warm.")
     print()
     
     try:
         request_start = time.monotonic()
         response = requests.post(
-            ENDPOINT_URL,
+            endpoint_url,
             json=payload,
             timeout=300,  # 5 minute timeout
             headers={"Content-Type": "application/json"},
@@ -146,7 +150,7 @@ def clone_voice():
         print("The server may be starting up (cold start). Try again in a moment.")
         return 1
     except requests.exceptions.ConnectionError:
-        print(f"\nERROR: Cannot connect to endpoint: {ENDPOINT_URL}")
+        print(f"\nERROR: Cannot connect to endpoint: {endpoint_url}")
         print("Tip: Check that ENDPOINT_URL is correct and the service is deployed.")
         return 1
     except requests.exceptions.HTTPError as e:
@@ -196,9 +200,9 @@ def clone_voice():
     return 0
 
 
-def health_check():
+def health_check(endpoint_url: str):
     """Check if the service is healthy"""
-    health_url = ENDPOINT_URL.replace("/generate", "/health")
+    health_url = endpoint_url.replace("/generate", "/health")
     
     print(f"Checking health at: {health_url}")
     
@@ -225,13 +229,11 @@ def main():
         python client_editable.py
     """
     import sys
-    
-    # Check for health check flag
+
     if len(sys.argv) > 1 and sys.argv[1] == "--health":
-        return health_check()
-    
-    # Run voice cloning with config from top of file
-    return clone_voice()
+        return health_check(ACTIVE_ENDPOINT_URL)
+
+    return clone_voice(ACTIVE_ENDPOINT_URL)
 
 
 if __name__ == "__main__":

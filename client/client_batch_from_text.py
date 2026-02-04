@@ -39,6 +39,15 @@ _env = load_env()
 ENDPOINT_URL = _env.get("ENDPOINT_URL", "https://your-endpoint.modal.run")
 SETTING_URL = _env.get("SETTING_URL", ENDPOINT_URL)
 
+USE_LOCAL = False
+
+LOCAL_ENDPOINT_URL = _env.get("LOCAL_ENDPOINT_URL", "http://localhost:8000/generate")
+LOCAL_SETTING_URL = _env.get("LOCAL_SETTING_URL", "http://localhost:8000/settings")
+
+if USE_LOCAL:
+    ENDPOINT_URL = LOCAL_ENDPOINT_URL
+    SETTING_URL = LOCAL_SETTING_URL
+
 # Path to your reference audio file (WAV format recommended, 3-10 seconds)
 # This is the voice you want to clone
 REFERENCE_AUDIO_PATH = "ref/jeff_hays_0/ref_audio.wav"
@@ -185,6 +194,8 @@ def fetch_server_settings(endpoint_url: str) -> dict:
     response = requests.get(url, timeout=50)
     response.raise_for_status()
     return response.json()
+
+
 
 
 def main() -> int:

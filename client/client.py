@@ -35,7 +35,11 @@ def load_env(path: str = ".env") -> dict:
 
 _env = load_env()
 
+USE_LOCAL = False
+
 DEFAULT_ENDPOINT = _env.get("ENDPOINT_URL", "https://your-endpoint.modal.run")
+LOCAL_ENDPOINT = _env.get("LOCAL_ENDPOINT_URL", "http://localhost:8000/generate")
+ACTIVE_ENDPOINT = LOCAL_ENDPOINT if USE_LOCAL else DEFAULT_ENDPOINT
 
 
 def read_audio_file(path: str) -> str:
@@ -179,16 +183,18 @@ Examples:
     parser.add_argument("text", nargs="?", help="Text to synthesize into speech")
     parser.add_argument("-a", "--audio", dest="reference_audio", help="Path to reference audio file (WAV)")
     parser.add_argument("-t", "--text", dest="reference_text", help="Transcript of reference audio")
-    parser.add_argument("-e", "--endpoint", default=DEFAULT_ENDPOINT, help="Modal endpoint URL")
+    parser.add_argument("-e", "--endpoint", default=ACTIVE_ENDPOINT, help="Endpoint URL")
     parser.add_argument("-o", "--output", help="Output audio file path (default: output_TIMESTAMP.wav)")
     parser.add_argument("--health", action="store_true", help="Check service health")
     parser.add_argument("-q", "--quiet", action="store_true", help="Suppress progress messages")
     
     args = parser.parse_args()
     
+    endpoint_url = args.endpoint
+
     # Health check mode
     if args.health:
-        result = health_check(args.endpoint)
+        result = health_check(endpoint_url)
         print(f"Health status: {result.get('status', 'unknown')}")
         if result.get('gpu_available'):
             print(f"GPU: {result.get('gpu_name', 'Unknown')}")
@@ -208,7 +214,7 @@ Examples:
             text=args.text,
             reference_audio_path=args.reference_audio,
             reference_text=args.reference_text,
-            endpoint_url=args.endpoint,
+            endpoint_url=endpoint_url,
             output_path=args.output,
             verbose=not args.quiet,
         )

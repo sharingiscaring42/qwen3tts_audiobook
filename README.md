@@ -203,6 +203,54 @@ modal run server/modal_server.py
 modal serve server/modal_server.py
 ```
 
+### Local WSL2 (pip + GPU)
+
+Run the same server logic locally under WSL2 with a Windows 11 host GPU.
+
+```bash
+# WSL2 system deps
+sudo apt update
+sudo apt install -y \
+  python3.11 python3.11-venv python3.11-dev \
+  ffmpeg libsndfile1 sox libsox-fmt-all \
+  build-essential cmake ninja-build
+
+# Create venv
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+
+# PyTorch with CUDA (WSL2 GPU)
+python -m pip install --index-url https://download.pytorch.org/whl/cu121 \
+  torch==2.8.0 torchaudio==2.8.0
+
+# Local server deps
+python -m pip install -r requirements_local.txt
+```
+
+Optional: pre-download model weights to local disk:
+
+```bash
+python local/download_model.py --model-dir models
+```
+
+Run the local server:
+
+```bash
+python local/local_server.py
+```
+
+Endpoints:
+- Generate: `http://localhost:8000/generate`
+- Health: `http://localhost:8000/health`
+- Settings: `http://localhost:8000/settings`
+
+Use the existing client against local server:
+
+```bash
+python client/client.py "Hello, local test" -a ref/your_ref.wav -t "your ref text" --local
+```
+
 ### Monitoring
 
 ```bash
