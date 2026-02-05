@@ -222,11 +222,52 @@ python -m pip install --upgrade pip
 
 # PyTorch with CUDA (WSL2 GPU)
 python -m pip install --index-url https://download.pytorch.org/whl/cu121 \
-  torch==2.8.0 torchaudio==2.8.0
+  torch==2.5.1+cu121 torchaudio==2.5.1+cu121
 
 # Local server deps
 python -m pip install -r requirements_local.txt
+
+# Optional: flash-attn (match your torch/ABI)
+python - <<'PY'
+import torch
+print(torch.__version__)
+print(torch._C._GLIBCXX_USE_CXX11_ABI)
+PY
+
+# For torch 2.5 + cu12 + cp311 + cxx11abiFALSE (most common)
+python -m pip install --no-cache-dir \
+  https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3%2Bcu12torch2.5cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+
+# If _GLIBCXX_USE_CXX11_ABI prints True, use the cxx11abiTRUE wheel instead.
+# Check the release page to match your torch/py version:
+# https://github.com/Dao-AILab/flash-attention/releases/tag/v2.8.3
 ```
+
+### Local WSL2 (flash-attn3 stack)
+
+Use a separate venv with torch 2.8 + CUDA 12.8 to enable flash-attn3.
+
+```bash
+# Create dedicated venv
+python3.11 -m venv .venv_flash3
+source .venv_flash3/bin/activate
+python -m pip install --upgrade pip
+
+# PyTorch CUDA 12.8 wheels
+python -m pip install --index-url https://download.pytorch.org/whl/cu128 \
+  torch==2.8.0+cu128 torchaudio==2.8.0+cu128
+
+# Local server deps
+python -m pip install -r requirements_local_flash3.txt
+
+# flash-attn3 (matches torch 2.8 + cp311 + cxx11abiFALSE)
+python -m pip install --no-cache-dir \
+  https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3%2Bcu12torch2.8cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+```
+
+Notes:
+- If your `_GLIBCXX_USE_CXX11_ABI` is True, use the `cxx11abiTRUE` wheel instead.
+- If the cu128 wheels are not available on your system, stick to the default local setup.
 
 Optional: pre-download model weights to local disk:
 
@@ -245,10 +286,10 @@ Endpoints:
 - Health: `http://localhost:8000/health`
 - Settings: `http://localhost:8000/settings`
 
-Use the existing client against local server:
+Use the existing client against local server (set `USE_LOCAL = True` in the client file):
 
 ```bash
-python client/client.py "Hello, local test" -a ref/your_ref.wav -t "your ref text" --local
+python client/client.py "Hello, local test" -a ref/your_ref.wav -t "your ref text"
 ```
 
 ### Monitoring

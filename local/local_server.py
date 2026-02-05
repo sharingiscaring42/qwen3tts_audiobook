@@ -7,10 +7,16 @@ Uses the same core logic as the Modal deployment, but runs fully locally.
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 from typing import List, Optional, Union
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from server.voice_cloner_core import (
     VoiceClonerCore,
