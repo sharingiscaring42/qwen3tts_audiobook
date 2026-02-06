@@ -12,25 +12,28 @@ It's designed to:
 """
 
 import modal
+import sys
 from pathlib import Path
 
-try:
-    from voice_cloner_core import VoiceClonerCore, MODEL_ID, ATTN_IMPLEMENTATION
-except ImportError:
-    from server.voice_cloner_core import VoiceClonerCore, MODEL_ID, ATTN_IMPLEMENTATION
+PROJECT_ROOT = Path(__file__).resolve().parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from voice_cloner_core import VoiceClonerCore, MODEL_ID, ATTN_IMPLEMENTATION
 
 FLASH_ATTN_WHEEL_URL = (
     "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/"
     "flash_attn-2.8.3%2Bcu12torch2.8cxx11abiFALSE-cp311-cp311-linux_x86_64.whl"
 )
 # ATTN_IMPLEMENTATION = "flash_attention_2"  # Alternative attention implementation
-SCALEDOWN_WINDOW = 300
+SCALEDOWN_WINDOW = 300 # 5 minutes scaledown window to keep container warm after last request
 TIMEOUT = 1200
 MEMORY = 16384
 
 # Image with all dependencies pre-installed
 IMAGE_BASE = "nvidia/cuda:12.8.0-devel-ubuntu22.04"
 GPU_TYPE = "A10"
+# ATTN_MODE = "sdpa_flash"  # options: "sdpa_flash", "auto", "flash_attn3"
 IMAGE_ENV = {
     "CUDA_HOME": "/usr/local/cuda",
     "HF_HOME": "/models/hf_cache",
@@ -39,8 +42,13 @@ IMAGE_ENV = {
     "PYTHONUNBUFFERED": "1",
     "PYTORCH_ALLOC_CONF": "expandable_segments:True",
     "ENABLE_DEBUG_TIMINGS": "0",
+    # "ATTN_IMPLEMENTATION": "flash_attention_2" if ATTN_MODE == "sdpa_flash" else (
+    #     "kernels-community/flash-attn3" if ATTN_MODE == "flash_attn3" else "default"
+    # ),
     # "ENABLE_CUDA_CLEANUP": "1",
 }
+
+CORE_FILE = PROJECT_ROOT / "voice_cloner_core.py"
 
 image = (
     modal.Image.from_registry(
@@ -79,12 +87,14 @@ image = (
     .pip_install("torch==2.8.0")
     .pip_install("torchaudio==2.8.0")
     .run_commands(f"python -m pip install --no-cache-dir '{FLASH_ATTN_WHEEL_URL}'")
+    .pip_install("kernels")
     # .pip_install("flash-attn==2.8.3", extra_options="--no-build-isolation")
     .env(IMAGE_ENV)
+    .add_local_file(str(CORE_FILE), remote_path="/root/voice_cloner_core.py")
 )
 
 # App definition
-app = modal.App("qwen3-tts-voice-cloner", image=image)
+app = modal.App(f"qwen3-tts-voice-cloner-{GPU_TYPE}", image=image)
 
 # Volume for model persistence
 volume = modal.Volume.from_name("qwen3-tts-models", create_if_missing=True)
@@ -195,19 +205,19 @@ class Qwen3VoiceCloner:
             max_new_tokens=request.get("max_new_tokens", 2048),
         )
     
-    @modal.fastapi_endpoint(method="GET")
-    def health(self) -> dict:
-        """Health check endpoint"""
-        import torch
-        core = getattr(self, "core", None)
-        return {
-            "status": "healthy",
-            "model": MODEL_ID,
-            "gpu_available": torch.cuda.is_available(),
-            "gpu_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
-            "model_load_seconds": getattr(core, "model_load_seconds", None),
-            "model_loaded_at": getattr(core, "model_loaded_at", None),
-        }
+    # @modal.fastapi_endpoint(method="GET")
+    # def health(self) -> dict:
+    #     """Health check endpoint"""
+    #     import torch
+    #     core = getattr(self, "core", None)
+    #     return {
+    #         "status": "healthy",
+    #         "model": MODEL_ID,
+    #         "gpu_available": torch.cuda.is_available(),
+    #         "gpu_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+    #         "model_load_seconds": getattr(core, "model_load_seconds", None),
+    #         "model_loaded_at": getattr(core, "model_loaded_at", None),
+    #     }
 
     @modal.fastapi_endpoint(method="GET")
     def settings(self) -> dict:

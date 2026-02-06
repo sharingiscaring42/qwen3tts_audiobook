@@ -1,5 +1,6 @@
 # Local server deps for flash-attn3 stack (WSL2 + CUDA 12.8)
 qwen-tts>=0.0.5
+kernels
 transformers==4.57.3
 accelerate>=0.25.0
 soundfile>=0.12.1

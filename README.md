@@ -269,6 +269,24 @@ Notes:
 - If your `_GLIBCXX_USE_CXX11_ABI` is True, use the `cxx11abiTRUE` wheel instead.
 - If the cu128 wheels are not available on your system, stick to the default local setup.
 
+### Attention Backend Choices
+
+Control attention from `server/modal_server.py` using `ATTN_MODE`:
+
+- `sdpa_flash` (recommended): forces PyTorch SDPA flash kernel
+- `auto`: let PyTorch decide (flash/mem-efficient/math)
+- `flash_attn3`: try `kernels-community/flash-attn3`
+
+`ATTN_MODE` maps to `ATTN_IMPLEMENTATION` internally:
+- `sdpa_flash` → `flash_attention_2`
+- `auto` → `default`
+- `flash_attn3` → `kernels-community/flash-attn3`
+
+Local override (optional):
+- export `ATTN_IMPLEMENTATION=flash_attention_2` (force SDPA flash)
+- export `ATTN_IMPLEMENTATION=default` (auto)
+- export `ATTN_IMPLEMENTATION=kernels-community/flash-attn3`
+
 Optional: pre-download model weights to local disk:
 
 ```bash
