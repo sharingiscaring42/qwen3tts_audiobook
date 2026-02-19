@@ -35,11 +35,74 @@ def load_env(path: str = ".env") -> dict:
 
 _env = load_env()
 
-# Modal endpoint URL
-ENDPOINT_URL = _env.get("ENDPOINT_URL", "https://your-endpoint.modal.run")
-SETTING_URL = _env.get("SETTING_URL", ENDPOINT_URL)
-
+CARD = "A10"
 USE_LOCAL = False
+
+# Path to your reference audio file (WAV format recommended, 3-10 seconds)
+# This is the voice you want to clone
+NARRATOR="anne"
+
+REFERENCE_AUDIO_PATH = f"ref/{NARRATOR}/ref_audio.wav"
+
+# Path to a text file containing the transcript of your reference audio
+# (what is being said in the reference audio file)
+REFERENCE_TEXT_PATH = f"ref/{NARRATOR}/ref_text.txt"
+# Input text file for generation
+NAME_FILE = "texte_fr_famille.txt"
+TEXT_PATH = f"input/txt/{NAME_FILE}"
+# Language ("Auto" or explicit language like "English")
+LANGUAGE = "English"
+
+SETTINGS = {
+    "A10": {
+        "TARGET_SECONDS": 60,
+        "CHARS_PER_SECOND": 15,
+        "MAX_CHUNK_MULTIPLIER": 1.05,
+        "LANG": {
+            "English": {
+                "BATCH_SIZE": 20,
+            },
+            "French": {
+                "BATCH_SIZE": 17,
+            },
+        },
+    },
+    "A100": {
+        "TARGET_SECONDS": 30,
+        "CHARS_PER_SECOND": 15,
+        "MAX_CHUNK_MULTIPLIER": 1.05,
+        "LANG": {
+            "English": {
+                "BATCH_SIZE": 56,
+            },
+            "French": {
+                "BATCH_SIZE": 28,
+            },
+        },
+    },
+    "H100": {
+        "TARGET_SECONDS": 60,
+        "CHARS_PER_SECOND": 15,
+        "MAX_CHUNK_MULTIPLIER": 1.05,
+        "LANG": {
+            "English": {
+                "BATCH_SIZE": 64,
+            },
+            "French": {
+                "BATCH_SIZE": 56,
+            },
+        },
+    },
+}
+
+TARGET_SECONDS = SETTINGS[CARD]["TARGET_SECONDS"]
+CHARS_PER_SECOND = SETTINGS[CARD]["CHARS_PER_SECOND"]
+MAX_CHUNK_MULTIPLIER = SETTINGS[CARD]["MAX_CHUNK_MULTIPLIER"]
+BATCH_SIZE = SETTINGS[CARD]["LANG"][LANGUAGE]["BATCH_SIZE"]
+
+# Modal endpoint URL
+ENDPOINT_URL = _env.get(f"ENDPOINT_URL_{CARD}", "https://your-endpoint.modal.run")
+SETTING_URL = _env.get(f"SETTING_URL_{CARD}", ENDPOINT_URL)
 
 LOCAL_ENDPOINT_URL = _env.get("LOCAL_ENDPOINT_URL", "http://localhost:8000/generate")
 LOCAL_SETTING_URL = _env.get("LOCAL_SETTING_URL", "http://localhost:8000/settings")
@@ -47,29 +110,6 @@ LOCAL_SETTING_URL = _env.get("LOCAL_SETTING_URL", "http://localhost:8000/setting
 if USE_LOCAL:
     ENDPOINT_URL = LOCAL_ENDPOINT_URL
     SETTING_URL = LOCAL_SETTING_URL
-
-# Path to your reference audio file (WAV format recommended, 3-10 seconds)
-# This is the voice you want to clone
-REFERENCE_AUDIO_PATH = "ref/jeff_hays_0/ref_audio.wav"
-
-# Path to a text file containing the transcript of your reference audio
-# (what is being said in the reference audio file)
-REFERENCE_TEXT_PATH = "ref/jeff_hays_0/ref_text.txt"
-# Input text file for generation
-TEXT_PATH = "input/beyond_the_timescale_chap1-10.txt"
-
-# Language ("Auto" or explicit language like "English")
-LANGUAGE = "English"
-
-# Target chunk length (seconds) and approximate chars/second
-TARGET_SECONDS = 60
-CHARS_PER_SECOND = 15
-# Cap how far we extend past target to hit a period
-MAX_CHUNK_MULTIPLIER = 1.15
-# Batch size per request (higher -> better GPU utilization)
-BATCH_SIZE = 20
-
-#A10 can handle 60 x 15 x 20
 
 # Cap generation length per request (hard cap on output length)
 MAX_NEW_TOKENS = 2048
@@ -84,8 +124,8 @@ RETRY_BATCH_SIZE = 8
 
 
 # Output directory and base filename
-OUTPUT_DIR = "output/beyond_chap1"
-OUTPUT_BASENAME = "beyond_chap1"
+OUTPUT_DIR = "output/texte_famille"
+OUTPUT_BASENAME = f"{NAME_FILE[:-4]}"
 
 # ============================================
 # END CONFIG

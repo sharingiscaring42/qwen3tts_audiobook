@@ -87,7 +87,7 @@ image = (
     .pip_install("torch==2.8.0")
     .pip_install("torchaudio==2.8.0")
     .run_commands(f"python -m pip install --no-cache-dir '{FLASH_ATTN_WHEEL_URL}'")
-    .pip_install("kernels")
+    # .pip_install("kernels")
     # .pip_install("flash-attn==2.8.3", extra_options="--no-build-isolation")
     .env(IMAGE_ENV)
     .add_local_file(str(CORE_FILE), remote_path="/root/voice_cloner_core.py")

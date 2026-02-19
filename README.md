@@ -181,6 +181,22 @@ python client/book_extract.py --input "book.epub" --output-dir "output/book"
 python client/client_batch_from_book.py --input "path/to/book.epub" --start-chapter 1 --end-chapter 5
 ```
 
+### Web Workflow UI (Tabs for Text + Book)
+
+Run the website to control both workflows from one place:
+
+```bash
+python web/app.py
+```
+
+Then open `http://localhost:7860`.
+
+What it includes:
+- `client_batch_from_text` tab: direct text or `.txt`, voice ref selection/upload, card defaults + override, generate/concat, play + download
+- `client_batch_from_book` tab: EPUB/PDF extract + chapter table, chapter range selection, generate/concat, play + download
+- Concat-only action for existing intermediary chunk folders
+- Saves outputs in project paths (`output/text/<name>/...`, `output/book/<book_name>/...`)
+
 ### Concatenate + Compress Audio Output
 
 ```bash
