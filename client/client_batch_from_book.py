@@ -1,14 +1,23 @@
 import argparse
 import base64
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
 
 import requests
 
 from book_extract import extract_book, write_extract_json, write_summary_txt
-from utils import load_env, read_audio_b64, read_text_file, split_text
+from utils import (
+    CARD_SETTINGS,
+    Tee,
+    card_defaults,
+    clone_voice_chunk,
+    fetch_server_settings,
+    load_env,
+    read_audio_b64,
+    read_text_file,
+    split_text,
+)
 
 _env = load_env()
 
@@ -19,7 +28,7 @@ _env = load_env()
 # CONFIG - EDIT THESE VALUES
 # ============================================
 
-CARD="A10"
+CARD = "A10"
 USE_LOCAL = False
 
 REFERENCE_AUDIO_PATH = "ref/jeff_hays_0/ref_audio.wav"
@@ -28,54 +37,9 @@ LANGUAGE = "English"
 
 # REFERENCE_AUDIO_PATH = "ref/herve_lacroix/ref_audio.wav"
 # REFERENCE_TEXT_PATH = "ref/herve_lacroix/ref_text.txt"
-# LANGUAGE = "French" 
+# LANGUAGE = "French"
 
-SETTINGS = {
-    "A10": {
-        "TARGET_SECONDS": 60,
-        "CHARS_PER_SECOND": 15,
-        "MAX_CHUNK_MULTIPLIER": 1.05,
-        "LANG":{
-            "English": {
-                "BATCH_SIZE": 20,
-            },
-            "French": {
-                "BATCH_SIZE": 17,
-            },
-        }
-    },
-    "A100": {
-        "TARGET_SECONDS": 30,
-        "CHARS_PER_SECOND": 15,
-        "MAX_CHUNK_MULTIPLIER": 1.05,
-        "LANG":{
-            "English": {
-                "BATCH_SIZE": 56,
-            },
-            "French": {
-                "BATCH_SIZE": 28,
-            },
-        }
-    },
-    "H100": {
-        "TARGET_SECONDS": 60,
-        "CHARS_PER_SECOND": 15,
-        "MAX_CHUNK_MULTIPLIER": 1.05,
-        "LANG":{
-            "English": {
-                "BATCH_SIZE": 64,
-            },
-            "French": {
-                "BATCH_SIZE": 56,
-            },
-        }
-    },
-}
-
-TARGET_SECONDS = SETTINGS[CARD]["TARGET_SECONDS"]
-CHARS_PER_SECOND = SETTINGS[CARD]["CHARS_PER_SECOND"]
-MAX_CHUNK_MULTIPLIER = SETTINGS[CARD]["MAX_CHUNK_MULTIPLIER"]
-BATCH_SIZE = SETTINGS[CARD]["LANG"][LANGUAGE]["BATCH_SIZE"]
+TARGET_SECONDS, CHARS_PER_SECOND, MAX_CHUNK_MULTIPLIER, BATCH_SIZE = card_defaults(CARD, LANGUAGE)
 
 # Cap generation length per request (hard cap on output length)
 MAX_NEW_TOKENS = 2048
@@ -105,37 +69,6 @@ if USE_LOCAL:
 # ============================================
 
 
-
-def settings_url(endpoint_url: str) -> str:
-    cleaned = endpoint_url.rstrip("/")
-    if "/" in cleaned and cleaned.rsplit("/", 1)[-1] in {"generate", "clone_voice"}:
-        return f"{cleaned.rsplit('/', 1)[0]}/settings"
-    return f"{cleaned}/settings"
-
-
-def fetch_server_settings(endpoint_url: str) -> dict:
-    url = endpoint_url
-    response = requests.get(url, timeout=60)
-    response.raise_for_status()
-    return response.json()
-
-
-
-
-def clone_voice_chunk(payload: dict) -> dict:
-    request_start = time.monotonic()
-    response = requests.post(
-        ENDPOINT_URL,
-        json=payload,
-        timeout=900,
-        headers={"Content-Type": "application/json"},
-    )
-    response.raise_for_status()
-    result = response.json()
-    result["client_roundtrip_seconds"] = time.monotonic() - request_start
-    return result
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description="Batch voice cloning from EPUB/PDF")
     parser.add_argument("--input", required=True)
@@ -157,19 +90,6 @@ def main() -> int:
     total_audio_seconds = 0.0
     total_processing_seconds = 0.0
 
-    class Tee:
-        def __init__(self, file_obj, stream):
-            self.file_obj = file_obj
-            self.stream = stream
-
-        def write(self, data):
-            self.file_obj.write(data)
-            self.stream.write(data)
-
-        def flush(self):
-            self.file_obj.flush()
-            self.stream.flush()
-
     with open(log_path, "w") as log_file:
         original_stdout = sys.stdout
         sys.stdout = Tee(log_file, original_stdout)
@@ -189,6 +109,7 @@ def main() -> int:
             print()
 
             print("Client settings:")
+            print(f"CARD = {CARD}")
             print(f"LANGUAGE = {LANGUAGE}")
             print(f"TARGET_SECONDS = {TARGET_SECONDS}")
             print(f"CHARS_PER_SECOND = {CHARS_PER_SECOND}")
@@ -212,11 +133,11 @@ def main() -> int:
                 return 1
 
             print("Reading reference audio...")
-            ref_audio_base64 = read_audio_b64(str(audio_path))
+            ref_audio_base64 = read_audio_b64(audio_path)
             print(f"Audio encoded: {len(ref_audio_base64)} characters")
 
             print("Reading reference text...")
-            ref_text = read_text_file(str(text_path))
+            ref_text = read_text_file(text_path)
             print(f"Reference text length: {len(ref_text)} characters")
 
             print("Extracting book...")
@@ -239,7 +160,6 @@ def main() -> int:
                 return 1
 
             print(f"Selected chapters: {start_index}..{end_index} (total {len(selected)})")
-            intermediary_dir.mkdir(parents=True, exist_ok=True)
 
             chunks = []
             for chapter in selected:
@@ -248,28 +168,43 @@ def main() -> int:
 
             print(f"Split into {len(chunks)} chunk(s)")
 
+            # Checkpoint: find already-completed chunks
+            done_set: set[int] = set()
+            for p in intermediary_dir.glob(f"{output_basename}_*.wav"):
+                suffix = p.stem.rsplit("_", 1)[-1]
+                if suffix.isdigit():
+                    done_set.add(int(suffix))
+            if done_set:
+                print(f"Checkpoint: {len(done_set)} chunk(s) already done, skipping.")
+
+            # Build (1-based index, text) for pending chunks only
+            pending = [(i + 1, t) for i, t in enumerate(chunks) if (i + 1) not in done_set]
+            if not pending:
+                print("All chunks already complete. Nothing to do.")
+                return 0
+            print(f"Generating {len(pending)} of {len(chunks)} chunk(s).")
+
             def chunk_batches(items, size):
                 for i in range(0, len(items), size):
                     yield items[i:i + size]
 
-            chunk_index = 1
-            retry_queue = []
+            retry_queue: list[tuple[int, str]] = []
 
-            batches = list(chunk_batches(chunks, BATCH_SIZE))
-            last_batch = []
+            batches = list(chunk_batches(pending, BATCH_SIZE))
+            last_batch: list[tuple[int, str]] = []
             if batches:
                 last_batch = batches.pop()
 
             for batch in batches:
                 print("-" * 60)
-                total_chars = sum(len(item) for item in batch)
-                max_chars = max(len(item) for item in batch)
+                total_chars = sum(len(t) for _, t in batch)
+                max_chars = max((len(t) for _, t in batch), default=0)
                 print(f"Batch size: {len(batch)}")
                 print(f"Batch total chars: {total_chars}")
                 print(f"Batch max chars: {max_chars}")
 
                 payload = {
-                    "text": batch,
+                    "text": [t for _, t in batch],
                     "ref_audio_base64": ref_audio_base64,
                     "ref_text": ref_text,
                     "language": LANGUAGE,
@@ -277,7 +212,7 @@ def main() -> int:
                 }
 
                 try:
-                    result = clone_voice_chunk(payload)
+                    result = clone_voice_chunk(ENDPOINT_URL, payload)
                 except requests.exceptions.Timeout:
                     print("ERROR: Request timed out.")
                     return 1
@@ -306,25 +241,24 @@ def main() -> int:
                 batch_audio_used = 0.0
                 total_processing_seconds += processing_seconds
 
-                for chunk_text, audio_b64, audio_seconds in zip(batch, audio_base64s, durations):
+                for (chunk_idx, chunk_text), audio_b64, audio_seconds in zip(batch, audio_base64s, durations):
                     audio_seconds = float(audio_seconds)
                     if RETRY_ON_LONG_AUDIO and audio_seconds > MAX_AUDIO_SECONDS:
                         print(
-                            f"Chunk {chunk_index}/{len(chunks)} | chars={len(chunk_text)} | "
+                            f"Chunk {chunk_idx}/{len(chunks)} | chars={len(chunk_text)} | "
                             f"audio={audio_seconds:.2f}s | deferred retry"
                         )
-                        retry_queue.append((chunk_index, chunk_text))
+                        retry_queue.append((chunk_idx, chunk_text))
                     else:
-                        output_file = intermediary_dir / f"{output_basename}_{chunk_index}.wav"
+                        output_file = intermediary_dir / f"{output_basename}_{chunk_idx}.wav"
                         audio_data = base64.b64decode(audio_b64)
                         with open(output_file, "wb") as f:
                             f.write(audio_data)
                         print(
-                            f"Chunk {chunk_index}/{len(chunks)} | chars={len(chunk_text)} | "
+                            f"Chunk {chunk_idx}/{len(chunks)} | chars={len(chunk_text)} | "
                             f"audio={audio_seconds:.2f}s | saved={output_file}"
                         )
                         batch_audio_used += audio_seconds
-                    chunk_index += 1
 
                 total_audio_seconds += batch_audio_used
                 rtf = processing_seconds / batch_audio_used if batch_audio_used > 0 else 0.0
@@ -347,17 +281,13 @@ def main() -> int:
                     )
 
             if last_batch or retry_queue:
-                combined = []
-                if last_batch:
-                    combined.extend([(i + 1, txt) for i, txt in enumerate(last_batch, start=chunk_index - len(last_batch))])
-                combined.extend(retry_queue)
-
-                combined_texts = [item[1] for item in combined]
-                combined_indices = [item[0] for item in combined]
+                combined = last_batch + retry_queue
+                combined_texts = [t for _, t in combined]
+                combined_indices = [i for i, _ in combined]
 
                 print("-" * 60)
-                total_chars = sum(len(item[1]) for item in combined)
-                max_chars = max(len(item[1]) for item in combined)
+                total_chars = sum(len(t) for _, t in combined)
+                max_chars = max((len(t) for _, t in combined), default=0)
                 print(f"Batch size: {len(combined)}")
                 print(f"Batch total chars: {total_chars}")
                 print(f"Batch max chars: {max_chars}")
@@ -373,7 +303,7 @@ def main() -> int:
                 }
 
                 try:
-                    result = clone_voice_chunk(payload)
+                    result = clone_voice_chunk(ENDPOINT_URL, payload)
                 except requests.exceptions.RequestException as e:
                     print(f"Final batch failed: {e}")
                     return 1

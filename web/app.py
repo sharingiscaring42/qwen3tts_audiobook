@@ -12,26 +12,6 @@ import gradio as gr
 import requests
 
 
-CARD_DEFAULTS = {
-    "A10": {
-        "target_seconds": 60,
-        "chars_per_second": 15,
-        "max_chunk_multiplier": 1.05,
-        "batch_size": {"English": 20, "French": 17},
-    },
-    "A100": {
-        "target_seconds": 30,
-        "chars_per_second": 15,
-        "max_chunk_multiplier": 1.05,
-        "batch_size": {"English": 56, "French": 28},
-    },
-    "H100": {
-        "target_seconds": 60,
-        "chars_per_second": 15,
-        "max_chunk_multiplier": 1.05,
-        "batch_size": {"English": 64, "French": 56},
-    },
-}
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -39,7 +19,7 @@ if str(ROOT) not in sys.path:
 
 from client.book_audio_concat import build_concat_list
 from client.book_extract import extract_book, write_extract_json, write_summary_txt
-from client.utils import load_env, read_audio_b64, read_text_file, split_text
+from client.utils import CARD_SETTINGS, card_defaults, load_env, read_audio_b64, read_text_file, split_text
 
 OUTPUT_BOOK = ROOT / "output" / "book"
 OUTPUT_TEXT = ROOT / "output" / "text"
@@ -197,11 +177,6 @@ def endpoint_for_card(card: str, use_local: bool, manual_endpoint: str | None, e
     return env_data.get(f"ENDPOINT_URL_{card}", env_data.get("ENDPOINT_URL", "https://your-endpoint.modal.run"))
 
 
-def defaults_for_card_language(card: str, language: str) -> tuple[int, int, float, int]:
-    cfg = CARD_DEFAULTS[card]
-    batch = cfg["batch_size"].get(language, cfg["batch_size"]["English"])
-    return cfg["target_seconds"], cfg["chars_per_second"], cfg["max_chunk_multiplier"], batch
-
 
 def resolve_reference(
     profile: str | None,
@@ -318,8 +293,7 @@ def concat_chunks(intermediary_dir: Path, basename: str, output_format: str, bit
 
 
 def on_card_or_lang_change(card: str, language: str):
-    target, cps, mult, batch = defaults_for_card_language(card, language)
-    return target, cps, mult, batch
+    return card_defaults(card, language)
 
 
 def get_ref_profile_text(profile: str | None):
@@ -561,7 +535,7 @@ def build_ui() -> gr.Blocks:
                 gr.Markdown("<div class='section-title'>Run Configuration</div>")
                 with gr.Group():
                     with gr.Row():
-                        card = gr.Dropdown(choices=list(CARD_DEFAULTS.keys()), value="A10", label="Card")
+                        card = gr.Dropdown(choices=list(CARD_SETTINGS.keys()), value="A10", label="Card")
                         language = gr.Dropdown(choices=["English", "French", "Auto"], value="English", label="Language")
                         use_local = gr.Checkbox(value=False, label="Use local endpoint")
                     endpoint_override = gr.Textbox(
