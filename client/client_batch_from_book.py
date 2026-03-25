@@ -1,6 +1,5 @@
 import argparse
 import base64
-import os
 import sys
 import time
 from datetime import datetime
@@ -9,21 +8,8 @@ from pathlib import Path
 import requests
 
 from book_extract import extract_book, write_extract_json, write_summary_txt
-from client_batch_from_text import split_text
+from utils import load_env, read_audio_b64, read_text_file, split_text
 
-
-def load_env(path: str = ".env") -> dict:
-    if not os.path.exists(path):
-        return {}
-    data = {}
-    with open(path, "r") as f:
-        for raw in f:
-            line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            data[key.strip()] = value.strip()
-    return data
 _env = load_env()
 
 # A10 24GB   1/RTF 9x       Modal: 1.10$ -> 0.13 $/h        fal.ai:  N/A
@@ -118,15 +104,6 @@ if USE_LOCAL:
 # END CONFIG
 # ============================================
 
-
-def read_audio_file(path: str) -> str:
-    with open(path, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
-
-
-def read_text_file(path: str) -> str:
-    with open(path, "r") as f:
-        return f.read().strip()
 
 
 def settings_url(endpoint_url: str) -> str:
@@ -235,7 +212,7 @@ def main() -> int:
                 return 1
 
             print("Reading reference audio...")
-            ref_audio_base64 = read_audio_file(str(audio_path))
+            ref_audio_base64 = read_audio_b64(str(audio_path))
             print(f"Audio encoded: {len(ref_audio_base64)} characters")
 
             print("Reading reference text...")
@@ -266,7 +243,7 @@ def main() -> int:
 
             chunks = []
             for chapter in selected:
-                chapter_chunks = split_text(chapter["text"], TARGET_SECONDS, CHARS_PER_SECOND)
+                chapter_chunks = split_text(chapter["text"], TARGET_SECONDS, CHARS_PER_SECOND, MAX_CHUNK_MULTIPLIER)
                 chunks.extend(chapter_chunks)
 
             print(f"Split into {len(chunks)} chunk(s)")

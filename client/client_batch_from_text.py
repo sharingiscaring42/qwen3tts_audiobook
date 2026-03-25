@@ -7,7 +7,6 @@ then extends to the next period (.) to cut cleanly.
 """
 
 import base64
-import os
 import sys
 import time
 from datetime import datetime
@@ -15,23 +14,11 @@ from pathlib import Path
 
 import requests
 
+from utils import load_env, read_audio_b64, read_text_file, split_text
+
 # ============================================
 # CONFIG - EDIT THESE VALUES
 # ============================================
-
-def load_env(path: str = ".env") -> dict:
-    if not os.path.exists(path):
-        return {}
-    data = {}
-    with open(path, "r") as f:
-        for raw in f:
-            line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            data[key.strip()] = value.strip()
-    return data
-
 
 _env = load_env()
 
@@ -131,69 +118,6 @@ OUTPUT_BASENAME = f"{NAME_FILE[:-4]}"
 # END CONFIG
 # ============================================
 
-
-def read_audio_file(path: str) -> str:
-    with open(path, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
-
-
-def read_text_file(path: str) -> str:
-    with open(path, "r") as f:
-        return f.read().strip()
-
-
-# def normalize_text(text: str) -> str:
-#     text = text.replace("\r\n", "\n").replace("\r", "\n")
-#     text = text.replace("…", "...")
-#     while "...." in text:
-#         text = text.replace("....", "...")
-#     while ".." in text:
-#         text = text.replace("..", ".")
-#     while "!!!" in text:
-#         text = text.replace("!!!", "!!")
-#     while "!!" in text:
-#         text = text.replace("!!", "!")
-#     while "???" in text:
-#         text = text.replace("???", "??")
-#     while "??" in text:
-#         text = text.replace("??", "?")
-#     text = text.replace("!.", "!").replace("?.", "?")
-#     text = text.replace("!?", "!").replace("?!", "?")
-#     text = text.replace("—", "-").replace("–", "-")
-#     while "--" in text:
-#         text = text.replace("--", "-")
-#     text = text.replace(" ,", ",").replace(" .", ".")
-#     text = " ".join(text.split())
-#     return text.strip()
-
-
-def split_text(text: str, target_seconds: int, chars_per_second: int) -> list[str]:
-    max_chars = max(1, int(target_seconds * chars_per_second * MAX_CHUNK_MULTIPLIER))
-    chunks = []
-    idx = 0
-    length = len(text)
-
-    while idx < length:
-        window_end = min(idx + max_chars, length)
-        if window_end >= length:
-            chunk = text[idx:].strip()
-            if chunk:
-                chunks.append(chunk)
-            break
-
-        window = text[idx:window_end]
-        reverse_period = window[::-1].find(".")
-        if reverse_period == -1:
-            cut_end = window_end
-        else:
-            cut_end = window_end - reverse_period
-
-        chunk = text[idx:cut_end].strip()
-        if chunk:
-            chunks.append(chunk)
-        idx = cut_end
-
-    return chunks
 
 
 def clone_voice_chunk(payload: dict) -> dict:
@@ -317,7 +241,7 @@ def main() -> int:
                 return 1
 
             print("Reading reference audio...")
-            ref_audio_base64 = read_audio_file(str(audio_path))
+            ref_audio_base64 = read_audio_b64(str(audio_path))
             print(f"Audio encoded: {len(ref_audio_base64)} characters")
 
             print("Reading reference text...")
@@ -328,7 +252,7 @@ def main() -> int:
             full_text = read_text_file(str(input_text_path))
             print(f"Input text length: {len(full_text)} characters")
 
-            chunks = split_text(full_text, TARGET_SECONDS, CHARS_PER_SECOND)
+            chunks = split_text(full_text, TARGET_SECONDS, CHARS_PER_SECOND, MAX_CHUNK_MULTIPLIER)
             print(f"Split into {len(chunks)} chunk(s)")
             print()
 

@@ -13,24 +13,11 @@ Usage:
 
 import base64
 import argparse
-import os
 from pathlib import Path
 import requests
 from typing import Optional
 
-
-def load_env(path: str = ".env") -> dict:
-    if not os.path.exists(path):
-        return {}
-    data = {}
-    with open(path, "r") as f:
-        for raw in f:
-            line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            data[key.strip()] = value.strip()
-    return data
+from utils import load_env, read_audio_b64
 
 
 _env = load_env()
@@ -41,11 +28,6 @@ DEFAULT_ENDPOINT = _env.get("ENDPOINT_URL", "https://your-endpoint.modal.run")
 LOCAL_ENDPOINT = _env.get("LOCAL_ENDPOINT_URL", "http://localhost:8000/generate")
 ACTIVE_ENDPOINT = LOCAL_ENDPOINT if USE_LOCAL else DEFAULT_ENDPOINT
 
-
-def read_audio_file(path: str) -> str:
-    """Read audio file and return as base64 string"""
-    with open(path, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
 
 
 def clone_voice(
@@ -87,7 +69,7 @@ def clone_voice(
     # Read and encode audio
     if verbose:
         print("Reading and encoding reference audio...")
-    audio_base64 = read_audio_file(str(audio_path))
+    audio_base64 = read_audio_b64(str(audio_path))
     if verbose:
         print(f"Audio encoded: {len(audio_base64)} characters")
     
