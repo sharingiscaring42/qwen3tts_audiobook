@@ -8,7 +8,6 @@ Supports resume: chunks whose output files already exist are skipped.
 """
 
 import argparse
-import base64
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -19,11 +18,11 @@ from utils import (
     CARD_SETTINGS,
     Tee,
     card_defaults,
-    clone_voice_chunk,
     fetch_server_settings,
     load_env,
     read_audio_b64,
     read_text_file,
+    run_generation,
     split_text,
 )
 
@@ -72,17 +71,6 @@ OUTPUT_BASENAME = f"{NAME_FILE[:-4]}"
 # ============================================
 # END CONFIG
 # ============================================
-
-
-def clone_voice_single(text: str, ref_audio_base64: str, ref_text: str, language: str, max_new_tokens: int) -> dict:
-    payload = {
-        "text": text,
-        "ref_audio_base64": ref_audio_base64,
-        "ref_text": ref_text,
-        "language": language,
-        "max_new_tokens": max_new_tokens,
-    }
-    return clone_voice_chunk(ENDPOINT_URL, payload)
 
 
 def main() -> int:
@@ -202,166 +190,21 @@ def main() -> int:
             print(f"Generating {len(pending)} of {len(chunks)} chunk(s).")
             print()
 
-            def chunk_batches(items, size):
-                for i in range(0, len(items), size):
-                    yield items[i:i + size]
-
-            retry_queue: list[tuple[int, str]] = []
-
-            batches = list(chunk_batches(pending, batch_size))
-            last_batch: list[tuple[int, str]] = []
-            if batches:
-                last_batch = batches.pop()
-
-            for batch in batches:
-                print("-" * 60)
-                total_chars = sum(len(t) for _, t in batch)
-                max_chars = max((len(t) for _, t in batch), default=0)
-                print(f"Batch size: {len(batch)}")
-                print(f"Batch total chars: {total_chars}")
-                print(f"Batch max chars: {max_chars}")
-
-                payload = {
-                    "text": [t for _, t in batch],
-                    "ref_audio_base64": ref_audio_base64,
-                    "ref_text": ref_text,
-                    "language": language,
-                    "max_new_tokens": MAX_NEW_TOKENS,
-                }
-
-                try:
-                    result = clone_voice_chunk(endpoint_url, payload)
-                except requests.exceptions.Timeout:
-                    print("ERROR: Request timed out.")
-                    return 1
-                except requests.exceptions.ConnectionError:
-                    print(f"ERROR: Cannot connect to endpoint: {endpoint_url}")
-                    return 1
-                except requests.exceptions.HTTPError as e:
-                    print(f"ERROR: Server error: {e.response.status_code}")
-                    print(f"Response: {e.response.text}")
-                    return 1
-
-                if not result.get("success", True):
-                    print(f"ERROR: Server processing failed: {result.get('error', 'Unknown error')}")
-                    return 1
-
-                audio_base64s = result.get("audio_base64s")
-                durations = result.get("duration_seconds")
-                processing_seconds = float(result.get("processing_seconds", 0.0))
-                timing_breakdown = result.get("timing_breakdown")
-                gpu_memory = result.get("gpu_memory")
-
-                if not isinstance(audio_base64s, list) or not isinstance(durations, list):
-                    print("ERROR: Expected batch response with audio_base64s and duration_seconds list")
-                    return 1
-
-                batch_audio_used = 0.0
-                total_processing_seconds += processing_seconds
-
-                for (chunk_idx, chunk_text), audio_b64, audio_seconds in zip(batch, audio_base64s, durations):
-                    audio_seconds = float(audio_seconds)
-                    if RETRY_ON_LONG_AUDIO and audio_seconds > MAX_AUDIO_SECONDS:
-                        print(
-                            f"Chunk {chunk_idx}/{len(chunks)} | chars={len(chunk_text)} | "
-                            f"audio={audio_seconds:.2f}s | deferred retry"
-                        )
-                        retry_queue.append((chunk_idx, chunk_text))
-                    else:
-                        output_file = output_dir / f"{output_basename}_{chunk_idx}.wav"
-                        audio_data = base64.b64decode(audio_b64)
-                        with open(output_file, "wb") as f:
-                            f.write(audio_data)
-                        print(
-                            f"Chunk {chunk_idx}/{len(chunks)} | chars={len(chunk_text)} | "
-                            f"audio={audio_seconds:.2f}s | saved={output_file}"
-                        )
-                        batch_audio_used += audio_seconds
-
-                total_audio_seconds += batch_audio_used
-                rtf = processing_seconds / batch_audio_used if batch_audio_used > 0 else 0.0
-                inv_rtf = batch_audio_used / processing_seconds if processing_seconds > 0 else 0.0
-                print(f"Batch processing time: {processing_seconds:.2f} seconds")
-                print(f"Batch RTF (processing/audio): {rtf:.3f}")
-                print(f"Batch 1/RTF (audio/processing): {inv_rtf:.3f}x")
-                if timing_breakdown:
-                    print(
-                        "Timing breakdown: "
-                        f"prompt={timing_breakdown.get('prompt_seconds', 0.0):.2f}s, "
-                        f"generate={timing_breakdown.get('generate_seconds', 0.0):.2f}s, "
-                        f"encode={timing_breakdown.get('encode_seconds', 0.0):.2f}s"
-                    )
-                if gpu_memory:
-                    print(
-                        "GPU memory: "
-                        f"allocated={gpu_memory.get('allocated_gb', 0.0):.2f} GB, "
-                        f"reserved={gpu_memory.get('reserved_gb', 0.0):.2f} GB"
-                    )
-
-            # Process last batch with deferred retries appended
-            if last_batch or retry_queue:
-                combined = last_batch + retry_queue
-                combined_texts = [t for _, t in combined]
-                combined_indices = [i for i, _ in combined]
-
-                print("-" * 60)
-                total_chars = sum(len(t) for _, t in combined)
-                max_chars = max((len(t) for _, t in combined), default=0)
-                print(f"Batch size: {len(combined)}")
-                print(f"Batch total chars: {total_chars}")
-                print(f"Batch max chars: {max_chars}")
-                if retry_queue:
-                    print("Last batch includes deferred retries")
-
-                payload = {
-                    "text": combined_texts,
-                    "ref_audio_base64": ref_audio_base64,
-                    "ref_text": ref_text,
-                    "language": language,
-                    "max_new_tokens": RETRY_MAX_NEW_TOKENS,
-                }
-
-                try:
-                    result = clone_voice_chunk(endpoint_url, payload)
-                except requests.exceptions.RequestException as e:
-                    print(f"Final batch failed: {e}")
-                    return 1
-
-                if not result.get("success", True):
-                    print(f"Final batch failed: {result.get('error', 'Unknown error')}")
-                    return 1
-
-                audio_base64s = result.get("audio_base64s")
-                durations = result.get("duration_seconds")
-                processing_seconds = float(result.get("processing_seconds", 0.0))
-                timing_breakdown = result.get("timing_breakdown")
-                gpu_memory = result.get("gpu_memory")
-
-                if not isinstance(audio_base64s, list) or not isinstance(durations, list):
-                    print("ERROR: Expected batch response with audio_base64s and duration_seconds list")
-                    return 1
-
-                batch_audio_used = 0.0
-                total_processing_seconds += processing_seconds
-
-                for idx, audio_b64, audio_seconds, text_item in zip(combined_indices, audio_base64s, durations, combined_texts):
-                    audio_seconds = float(audio_seconds)
-                    output_file = output_dir / f"{output_basename}_{idx}.wav"
-                    audio_data = base64.b64decode(audio_b64)
-                    with open(output_file, "wb") as f:
-                        f.write(audio_data)
-                    print(
-                        f"Chunk {idx}/{len(chunks)} | chars={len(text_item)} | "
-                        f"audio={audio_seconds:.2f}s | saved={output_file}"
-                    )
-                    batch_audio_used += audio_seconds
-
-                total_audio_seconds += batch_audio_used
-                rtf = processing_seconds / batch_audio_used if batch_audio_used > 0 else 0.0
-                inv_rtf = batch_audio_used / processing_seconds if processing_seconds > 0 else 0.0
-                print(f"Batch processing time: {processing_seconds:.2f} seconds")
-                print(f"Batch RTF (processing/audio): {rtf:.3f}")
-                print(f"Batch 1/RTF (audio/processing): {inv_rtf:.3f}x")
+            total_audio_seconds, total_processing_seconds = run_generation(
+                endpoint_url=endpoint_url,
+                pending=pending,
+                total_chunks=len(chunks),
+                ref_audio_base64=ref_audio_base64,
+                ref_text=ref_text,
+                language=language,
+                batch_size=batch_size,
+                output_dir=output_dir,
+                output_basename=output_basename,
+                max_new_tokens=MAX_NEW_TOKENS,
+                retry_on_long_audio=RETRY_ON_LONG_AUDIO,
+                max_audio_seconds=MAX_AUDIO_SECONDS,
+                retry_max_new_tokens=RETRY_MAX_NEW_TOKENS,
+            )
         finally:
             print("=" * 60)
             print("TOTAL SUMMARY")
