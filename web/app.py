@@ -3,37 +3,15 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
 
 import gradio as gr
 import requests
 
 
-CARD_DEFAULTS = {
-    "A10": {
-        "target_seconds": 60,
-        "chars_per_second": 15,
-        "max_chunk_multiplier": 1.05,
-        "batch_size": {"English": 20, "French": 17},
-    },
-    "A100": {
-        "target_seconds": 30,
-        "chars_per_second": 15,
-        "max_chunk_multiplier": 1.05,
-        "batch_size": {"English": 56, "French": 28},
-    },
-    "H100": {
-        "target_seconds": 60,
-        "chars_per_second": 15,
-        "max_chunk_multiplier": 1.05,
-        "batch_size": {"English": 64, "French": 56},
-    },
-}
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -41,6 +19,7 @@ if str(ROOT) not in sys.path:
 
 from client.book_audio_concat import build_concat_list
 from client.book_extract import extract_book, write_extract_json, write_summary_txt
+from client.utils import CARD_SETTINGS, card_defaults, load_env, read_audio_b64, read_text_file, split_text
 
 OUTPUT_BOOK = ROOT / "output" / "book"
 OUTPUT_TEXT = ROOT / "output" / "text"
@@ -158,59 +137,12 @@ CUSTOM_CSS = """
 """
 
 
-def load_env(path: Path) -> dict[str, str]:
-    if not path.exists():
-        return {}
-    data: dict[str, str] = {}
-    with open(path, "r") as f:
-        for raw in f:
-            line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            data[key.strip()] = value.strip()
-    return data
-
 
 def sanitize_name(name: str, fallback: str = "run") -> str:
     cleaned = re.sub(r"[^a-zA-Z0-9_-]+", "_", (name or "").strip())
     cleaned = cleaned.strip("_")
     return cleaned or fallback
 
-
-def split_text(text: str, target_seconds: int, chars_per_second: int, max_chunk_multiplier: float) -> list[str]:
-    max_chars = max(1, int(target_seconds * chars_per_second * max_chunk_multiplier))
-    chunks: list[str] = []
-    idx = 0
-    length = len(text)
-
-    while idx < length:
-        window_end = min(idx + max_chars, length)
-        if window_end >= length:
-            chunk = text[idx:].strip()
-            if chunk:
-                chunks.append(chunk)
-            break
-
-        window = text[idx:window_end]
-        reverse_period = window[::-1].find(".")
-        cut_end = window_end if reverse_period == -1 else window_end - reverse_period
-        chunk = text[idx:cut_end].strip()
-        if chunk:
-            chunks.append(chunk)
-        idx = cut_end
-
-    return chunks
-
-
-def encode_audio(path: Path) -> str:
-    with open(path, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
-
-
-def read_text(path: Path) -> str:
-    with open(path, "r") as f:
-        return f.read().strip()
 
 
 def list_reference_profiles() -> list[str]:
@@ -245,11 +177,6 @@ def endpoint_for_card(card: str, use_local: bool, manual_endpoint: str | None, e
     return env_data.get(f"ENDPOINT_URL_{card}", env_data.get("ENDPOINT_URL", "https://your-endpoint.modal.run"))
 
 
-def defaults_for_card_language(card: str, language: str) -> tuple[int, int, float, int]:
-    cfg = CARD_DEFAULTS[card]
-    batch = cfg["batch_size"].get(language, cfg["batch_size"]["English"])
-    return cfg["target_seconds"], cfg["chars_per_second"], cfg["max_chunk_multiplier"], batch
-
 
 def resolve_reference(
     profile: str | None,
@@ -268,13 +195,13 @@ def resolve_reference(
     if ref_text_input and ref_text_input.strip():
         ref_text = ref_text_input.strip()
     elif uploaded_ref_text_file:
-        ref_text = read_text(Path(uploaded_ref_text_file))
+        ref_text = read_text_file(Path(uploaded_ref_text_file))
     elif profile_text is not None and profile_text.exists():
-        ref_text = read_text(profile_text)
+        ref_text = read_text_file(profile_text)
     else:
         raise ValueError("Missing reference text. Type text, upload .txt, or select a reference profile.")
 
-    ref_audio_b64 = encode_audio(audio_path)
+    ref_audio_b64 = read_audio_b64(audio_path)
     source_desc = f"audio={audio_path}"
     return ref_audio_b64, ref_text, source_desc
 
@@ -366,15 +293,14 @@ def concat_chunks(intermediary_dir: Path, basename: str, output_format: str, bit
 
 
 def on_card_or_lang_change(card: str, language: str):
-    target, cps, mult, batch = defaults_for_card_language(card, language)
-    return target, cps, mult, batch
+    return card_defaults(card, language)
 
 
 def get_ref_profile_text(profile: str | None):
     _, text_path = profile_paths(profile)
     if text_path is None:
         return ""
-    return read_text(text_path)
+    return read_text_file(text_path)
 
 
 def run_text_workflow(
@@ -397,13 +323,13 @@ def run_text_workflow(
     output_format: str,
     bitrate: str,
 ):
-    env_data = load_env(ROOT / ".env")
+    env_data = load_env(str(ROOT / ".env"))
     endpoint = endpoint_for_card(card, use_local, endpoint_override, env_data)
     basename = sanitize_name(output_name, "text")
 
     full_text = (text_input or "").strip()
     if txt_upload:
-        full_text = read_text(Path(txt_upload))
+        full_text = read_text_file(Path(txt_upload))
     if not full_text:
         raise gr.Error("Provide text in the textbox or upload a .txt file.")
 
@@ -522,7 +448,7 @@ def run_book_generation(
     if not selected:
         raise gr.Error("Selected chapter range is empty.")
 
-    env_data = load_env(ROOT / ".env")
+    env_data = load_env(str(ROOT / ".env"))
     endpoint = endpoint_for_card(card, use_local, endpoint_override, env_data)
 
     try:
@@ -609,7 +535,7 @@ def build_ui() -> gr.Blocks:
                 gr.Markdown("<div class='section-title'>Run Configuration</div>")
                 with gr.Group():
                     with gr.Row():
-                        card = gr.Dropdown(choices=list(CARD_DEFAULTS.keys()), value="A10", label="Card")
+                        card = gr.Dropdown(choices=list(CARD_SETTINGS.keys()), value="A10", label="Card")
                         language = gr.Dropdown(choices=["English", "French", "Auto"], value="English", label="Language")
                         use_local = gr.Checkbox(value=False, label="Use local endpoint")
                     endpoint_override = gr.Textbox(
