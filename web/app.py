@@ -35,6 +35,25 @@ CARD_DEFAULTS = {
     },
 }
 
+TTS_MODE_DEFAULT = "base_clone"
+TTS_MODELS_BY_MODE = {
+    "base_clone": [
+        "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+        "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+    ],
+    "custom_voice": [
+        "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+        "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
+    ],
+    "voice_design": [
+        "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+    ],
+}
+ASR_MODELS = [
+    "Qwen/Qwen3-ASR-1.7B",
+    "Qwen/Qwen3-ASR-0.6B",
+]
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -242,7 +261,55 @@ def endpoint_for_card(card: str, use_local: bool, manual_endpoint: str | None, e
         return manual_endpoint.strip()
     if use_local:
         return env_data.get("LOCAL_ENDPOINT_URL", "http://localhost:8000/generate")
-    return env_data.get(f"ENDPOINT_URL_{card}", env_data.get("ENDPOINT_URL", "https://your-endpoint.modal.run"))
+    key = f"TTS_ENDPOINT_URL_{card}"
+    endpoint = env_data.get(key, "").strip()
+    if not endpoint:
+        raise gr.Error(f"Missing {key} in .env")
+    return endpoint
+
+
+def asr_endpoint(card: str, use_local: bool, manual_endpoint: str | None, env_data: dict[str, str]) -> str:
+    if manual_endpoint and manual_endpoint.strip():
+        return manual_endpoint.strip()
+    if use_local:
+        return env_data.get("LOCAL_ASR_ENDPOINT_URL", "http://localhost:8000/transcribe")
+    key = f"ASR_ENDPOINT_URL_{card}"
+    endpoint = env_data.get(key, "").strip()
+    if not endpoint:
+        raise gr.Error(f"Missing {key} in .env")
+    return endpoint
+
+
+def build_tts_payload(
+    *,
+    text,
+    language: str,
+    max_new_tokens: int,
+    tts_mode: str,
+    tts_model: str,
+    ref_audio_base64: str,
+    ref_text: str,
+    speaker: str,
+    prompt_instruct_text: str,
+    voice_prompt: str,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "text": text,
+        "language": language,
+        "max_new_tokens": max_new_tokens,
+        "tts_mode": tts_mode,
+        "tts_model": tts_model,
+    }
+    if tts_mode == "base_clone":
+        payload["ref_audio_base64"] = ref_audio_base64
+        payload["ref_text"] = ref_text
+    elif tts_mode == "custom_voice":
+        payload["speaker"] = speaker
+        if prompt_instruct_text:
+            payload["prompt_instruct_text"] = prompt_instruct_text
+    else:
+        payload["prompt"] = voice_prompt
+    return payload
 
 
 def defaults_for_card_language(card: str, language: str) -> tuple[int, int, float, int]:
@@ -287,6 +354,11 @@ def clone_batch(
     language: str,
     batch_size: int,
     max_new_tokens: int,
+    tts_mode: str,
+    tts_model: str,
+    speaker: str,
+    prompt_instruct_text: str,
+    voice_prompt: str,
     output_dir: Path,
     basename: str,
 ) -> tuple[list[Path], str]:
@@ -299,15 +371,22 @@ def clone_batch(
 
     for i in range(0, len(chunks), batch_size):
         batch = chunks[i : i + batch_size]
-        payload = {
-            "text": batch,
-            "ref_audio_base64": ref_audio_base64,
-            "ref_text": ref_text,
-            "language": language,
-            "max_new_tokens": max_new_tokens,
-        }
+        payload = build_tts_payload(
+            text=batch,
+            language=language,
+            max_new_tokens=max_new_tokens,
+            tts_mode=tts_mode,
+            tts_model=tts_model,
+            ref_audio_base64=ref_audio_base64,
+            ref_text=ref_text,
+            speaker=speaker,
+            prompt_instruct_text=prompt_instruct_text,
+            voice_prompt=voice_prompt,
+        )
         response = requests.post(endpoint, json=payload, timeout=900, headers={"Content-Type": "application/json"})
-        response.raise_for_status()
+        if response.status_code >= 400:
+            detail = response.text.strip() or f"HTTP {response.status_code}"
+            raise gr.Error(f"TTS request failed ({response.status_code}): {detail}")
         result = response.json()
         if not result.get("success", True):
             raise RuntimeError(result.get("error", "Unknown generation error"))
@@ -377,9 +456,86 @@ def get_ref_profile_text(profile: str | None):
     return read_text(text_path)
 
 
+def on_tts_mode_change(tts_mode: str):
+    models = TTS_MODELS_BY_MODE.get(tts_mode, TTS_MODELS_BY_MODE[TTS_MODE_DEFAULT])
+    return (
+        gr.update(choices=models, value=models[0]),
+        gr.update(visible=tts_mode == "base_clone"),
+        gr.update(visible=tts_mode == "custom_voice"),
+        gr.update(visible=tts_mode == "voice_design"),
+    )
+
+
+def run_asr_workflow(
+    card: str,
+    use_local: bool,
+    endpoint_override: str,
+    audio_file: str | None,
+    asr_model: str,
+    language: str,
+    return_timestamps: bool,
+    align_ref_text: str,
+):
+    if not audio_file:
+        raise gr.Error("Upload an audio file first.")
+
+    env_data = load_env(ROOT / ".env")
+    endpoint = asr_endpoint(card, use_local, endpoint_override, env_data)
+    audio_path = Path(audio_file)
+    with open(audio_path, "rb") as f:
+        audio_base64 = base64.b64encode(f.read()).decode("utf-8")
+
+    payload: dict[str, Any] = {
+        "audio_base64": audio_base64,
+        "asr_model": asr_model,
+        "language": language,
+        "return_timestamps": return_timestamps,
+    }
+    if align_ref_text.strip():
+        payload["align_ref_text"] = align_ref_text.strip()
+
+    try:
+        response = requests.post(endpoint, json=payload, timeout=900, headers={"Content-Type": "application/json"})
+        if response.status_code >= 400:
+            detail = response.text.strip() or f"HTTP {response.status_code}"
+            raise gr.Error(f"ASR request failed ({response.status_code}): {detail}")
+        result = response.json()
+    except Exception as exc:
+        raise gr.Error(str(exc)) from exc
+
+    output_dir = ROOT / "output" / "asr"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    stem = sanitize_name(audio_path.stem, "asr")
+    txt_path = output_dir / f"{stem}.txt"
+    json_path = output_dir / f"{stem}.json"
+
+    transcript = result.get("text", "")
+    with open(txt_path, "w") as f:
+        f.write(transcript)
+    with open(json_path, "w") as f:
+        json.dump(result, f, indent=2)
+
+    log = "\n".join(
+        [
+            f"endpoint={endpoint}",
+            f"model={asr_model}",
+            f"timestamps={return_timestamps}",
+            f"saved_txt={txt_path}",
+            f"saved_json={json_path}",
+            f"processing_seconds={result.get('processing_seconds', 0.0)}",
+        ]
+    )
+    return transcript, str(txt_path), str(json_path), json.dumps(result, indent=2), log
+
+
 def run_text_workflow(
     card: str,
     language: str,
+    tts_mode: str,
+    tts_model: str,
+    speaker: str,
+    prompt_instruct_text: str,
+    voice_prompt: str,
     use_local: bool,
     endpoint_override: str,
     target_seconds: int,
@@ -407,15 +563,23 @@ def run_text_workflow(
     if not full_text:
         raise gr.Error("Provide text in the textbox or upload a .txt file.")
 
-    try:
-        ref_audio_b64, ref_text, ref_source = resolve_reference(
-            profile=profile,
-            uploaded_audio=uploaded_audio,
-            uploaded_ref_text_file=uploaded_ref_text_file,
-            ref_text_input=ref_text_input,
-        )
-    except Exception as exc:
-        raise gr.Error(str(exc)) from exc
+    ref_audio_b64 = ""
+    ref_text = ""
+    ref_source = "none"
+    if tts_mode == "base_clone":
+        try:
+            ref_audio_b64, ref_text, ref_source = resolve_reference(
+                profile=profile,
+                uploaded_audio=uploaded_audio,
+                uploaded_ref_text_file=uploaded_ref_text_file,
+                ref_text_input=ref_text_input,
+            )
+        except Exception as exc:
+            raise gr.Error(str(exc)) from exc
+    elif tts_mode == "custom_voice" and not (speaker or "").strip():
+        raise gr.Error("Speaker is required in custom_voice mode.")
+    elif tts_mode == "voice_design" and not (voice_prompt or "").strip():
+        raise gr.Error("Voice prompt is required in voice_design mode.")
 
     chunks = split_text(full_text, target_seconds, chars_per_second, max_chunk_multiplier)
     if not chunks:
@@ -432,6 +596,11 @@ def run_text_workflow(
             language=language,
             batch_size=int(batch_size),
             max_new_tokens=int(max_new_tokens),
+            tts_mode=tts_mode,
+            tts_model=tts_model,
+            speaker=speaker,
+            prompt_instruct_text=prompt_instruct_text,
+            voice_prompt=voice_prompt,
             output_dir=intermediary,
             basename=basename,
         )
@@ -492,6 +661,11 @@ def run_book_generation(
     extract_json: str,
     card: str,
     language: str,
+    tts_mode: str,
+    tts_model: str,
+    speaker: str,
+    prompt_instruct_text: str,
+    voice_prompt: str,
     use_local: bool,
     endpoint_override: str,
     target_seconds: int,
@@ -525,15 +699,23 @@ def run_book_generation(
     env_data = load_env(ROOT / ".env")
     endpoint = endpoint_for_card(card, use_local, endpoint_override, env_data)
 
-    try:
-        ref_audio_b64, ref_text, ref_source = resolve_reference(
-            profile=profile,
-            uploaded_audio=uploaded_audio,
-            uploaded_ref_text_file=uploaded_ref_text_file,
-            ref_text_input=ref_text_input,
-        )
-    except Exception as exc:
-        raise gr.Error(str(exc)) from exc
+    ref_audio_b64 = ""
+    ref_text = ""
+    ref_source = "none"
+    if tts_mode == "base_clone":
+        try:
+            ref_audio_b64, ref_text, ref_source = resolve_reference(
+                profile=profile,
+                uploaded_audio=uploaded_audio,
+                uploaded_ref_text_file=uploaded_ref_text_file,
+                ref_text_input=ref_text_input,
+            )
+        except Exception as exc:
+            raise gr.Error(str(exc)) from exc
+    elif tts_mode == "custom_voice" and not (speaker or "").strip():
+        raise gr.Error("Speaker is required in custom_voice mode.")
+    elif tts_mode == "voice_design" and not (voice_prompt or "").strip():
+        raise gr.Error("Voice prompt is required in voice_design mode.")
 
     chunks: list[str] = []
     for chapter in selected:
@@ -561,6 +743,11 @@ def run_book_generation(
             language=language,
             batch_size=int(batch_size),
             max_new_tokens=int(max_new_tokens),
+            tts_mode=tts_mode,
+            tts_model=tts_model,
+            speaker=speaker,
+            prompt_instruct_text=prompt_instruct_text,
+            voice_prompt=voice_prompt,
             output_dir=intermediary,
             basename=book_name,
         )
@@ -612,6 +799,17 @@ def build_ui() -> gr.Blocks:
                         card = gr.Dropdown(choices=list(CARD_DEFAULTS.keys()), value="A10", label="Card")
                         language = gr.Dropdown(choices=["English", "French", "Auto"], value="English", label="Language")
                         use_local = gr.Checkbox(value=False, label="Use local endpoint")
+                    with gr.Row():
+                        tts_mode = gr.Dropdown(
+                            choices=list(TTS_MODELS_BY_MODE.keys()),
+                            value=TTS_MODE_DEFAULT,
+                            label="TTS mode",
+                        )
+                        tts_model = gr.Dropdown(
+                            choices=TTS_MODELS_BY_MODE[TTS_MODE_DEFAULT],
+                            value=TTS_MODELS_BY_MODE[TTS_MODE_DEFAULT][0],
+                            label="TTS model",
+                        )
                     endpoint_override = gr.Textbox(
                         label="Endpoint override",
                         placeholder="Optional full /generate URL (leave blank to use .env)",
@@ -625,7 +823,7 @@ def build_ui() -> gr.Blocks:
 
             with gr.Column(scale=5):
                 gr.Markdown("<div class='section-title'>Voice Reference</div>")
-                with gr.Group():
+                with gr.Group(visible=True) as base_clone_group:
                     profile = gr.Dropdown(
                         choices=profiles,
                         value=default_profile,
@@ -641,6 +839,19 @@ def build_ui() -> gr.Blocks:
                         lines=4,
                         value=get_ref_profile_text(default_profile),
                         placeholder="Type reference transcript here (this overrides uploaded/profile text)",
+                    )
+                with gr.Group(visible=False) as custom_voice_group:
+                    speaker = gr.Textbox(label="Speaker", placeholder="Example: Chelsie")
+                    prompt_instruct_text = gr.Textbox(
+                        label="Prompt instruct text (optional)",
+                        lines=3,
+                        placeholder="Optional speaking style instruction",
+                    )
+                with gr.Group(visible=False) as voice_design_group:
+                    voice_prompt = gr.Textbox(
+                        label="Voice design prompt",
+                        lines=5,
+                        placeholder="Describe the target voice style and qualities",
                     )
 
         with gr.Tabs():
@@ -677,8 +888,8 @@ def build_ui() -> gr.Blocks:
 
                 gr.Markdown("### 2) Chapter Selection + Generation")
                 with gr.Row():
-                    start_chapter = gr.Slider(minimum=1, maximum=1, step=1, value=1, label="Start chapter")
-                    end_chapter = gr.Slider(minimum=1, maximum=1, step=1, value=1, label="End chapter")
+                    start_chapter = gr.Slider(minimum=1, maximum=5000, step=1, value=1, label="Start chapter")
+                    end_chapter = gr.Slider(minimum=1, maximum=5000, step=1, value=1, label="End chapter")
                     book_format = gr.Dropdown(choices=["ogg", "m4a"], value="ogg", label="Final format")
                     book_bitrate = gr.Textbox(label="Bitrate", value="48k")
                 book_run_btn = gr.Button("Generate + Concat Book Audio", variant="primary")
@@ -706,6 +917,32 @@ def build_ui() -> gr.Blocks:
 
                 extract_json_state = gr.State("")
 
+            with gr.Tab("ASR: /transcribe"):
+                gr.Markdown("### Transcribe Audio")
+                with gr.Row():
+                    asr_audio = gr.Audio(type="filepath", label="Upload audio")
+                    with gr.Column():
+                        asr_model = gr.Dropdown(choices=ASR_MODELS, value=ASR_MODELS[0], label="ASR model")
+                        asr_language = gr.Textbox(value="auto", label="Language")
+                        asr_timestamps = gr.Checkbox(value=False, label="Return timestamps")
+                        asr_align_ref = gr.Textbox(
+                            label="Align reference text (optional)",
+                            placeholder="Used when timestamps are enabled",
+                            lines=3,
+                        )
+                        asr_endpoint_override = gr.Textbox(
+                            label="ASR endpoint override",
+                            placeholder="Optional full /transcribe URL",
+                        )
+                        asr_run_btn = gr.Button("Run Transcription", variant="primary")
+
+                asr_transcript = gr.Textbox(label="Transcript", lines=10, interactive=False)
+                with gr.Row():
+                    asr_txt_download = gr.File(label="Download .txt")
+                    asr_json_download = gr.File(label="Download .json")
+                asr_json_preview = gr.Textbox(label="JSON metadata", lines=12, interactive=False)
+                asr_log = gr.Textbox(label="Run log", lines=6, interactive=False)
+
         card.change(
             on_card_or_lang_change,
             inputs=[card, language],
@@ -717,12 +954,22 @@ def build_ui() -> gr.Blocks:
             outputs=[target_seconds, chars_per_second, max_chunk_multiplier, batch_size],
         )
         profile.change(get_ref_profile_text, inputs=[profile], outputs=[ref_text_input])
+        tts_mode.change(
+            on_tts_mode_change,
+            inputs=[tts_mode],
+            outputs=[tts_model, base_clone_group, custom_voice_group, voice_design_group],
+        )
 
         text_run_btn.click(
             run_text_workflow,
             inputs=[
                 card,
                 language,
+                tts_mode,
+                tts_model,
+                speaker,
+                prompt_instruct_text,
+                voice_prompt,
                 use_local,
                 endpoint_override,
                 target_seconds,
@@ -763,6 +1010,11 @@ def build_ui() -> gr.Blocks:
                 extract_json_state,
                 card,
                 language,
+                tts_mode,
+                tts_model,
+                speaker,
+                prompt_instruct_text,
+                voice_prompt,
                 use_local,
                 endpoint_override,
                 target_seconds,
@@ -786,6 +1038,21 @@ def build_ui() -> gr.Blocks:
             run_concat_only,
             inputs=[concat_dir, concat_base, concat_format, concat_bitrate],
             outputs=[concat_player, concat_download, concat_log],
+        )
+
+        asr_run_btn.click(
+            run_asr_workflow,
+            inputs=[
+                card,
+                use_local,
+                asr_endpoint_override,
+                asr_audio,
+                asr_model,
+                asr_language,
+                asr_timestamps,
+                asr_align_ref,
+            ],
+            outputs=[asr_transcript, asr_txt_download, asr_json_download, asr_json_preview, asr_log],
         )
 
     return demo

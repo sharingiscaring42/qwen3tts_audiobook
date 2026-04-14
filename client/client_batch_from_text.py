@@ -101,8 +101,10 @@ MAX_CHUNK_MULTIPLIER = SETTINGS[CARD]["MAX_CHUNK_MULTIPLIER"]
 BATCH_SIZE = SETTINGS[CARD]["LANG"][LANGUAGE]["BATCH_SIZE"]
 
 # Modal endpoint URL
-ENDPOINT_URL = _env.get(f"ENDPOINT_URL_{CARD}", "https://your-endpoint.modal.run")
-SETTING_URL = _env.get(f"SETTING_URL_{CARD}", ENDPOINT_URL)
+ENDPOINT_URL = _env.get(f"TTS_ENDPOINT_URL_{CARD}", "").strip()
+if not ENDPOINT_URL and not USE_LOCAL:
+    raise RuntimeError(f"Missing TTS_ENDPOINT_URL_{CARD} in .env")
+SETTING_URL = _env.get(f"TTS_SETTINGS_URL_{CARD}", ENDPOINT_URL).strip() or ENDPOINT_URL
 
 LOCAL_ENDPOINT_URL = _env.get("LOCAL_ENDPOINT_URL", "http://localhost:8000/generate")
 LOCAL_SETTING_URL = _env.get("LOCAL_SETTING_URL", "http://localhost:8000/settings")

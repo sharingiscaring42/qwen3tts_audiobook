@@ -40,10 +40,11 @@ def main() -> int:
     print("=" * 60)
 
     env = load_env()
-    if not env.get("ENDPOINT_URL"):
-        print("WARNING: ENDPOINT_URL not set in .env")
-    if not env.get("SETTING_URL"):
-        print("WARNING: SETTING_URL not set in .env")
+    card = "A10"
+    if not env.get(f"TTS_ENDPOINT_URL_{card}"):
+        print(f"WARNING: TTS_ENDPOINT_URL_{card} not set in .env")
+    if not env.get(f"TTS_SETTINGS_URL_{card}"):
+        print(f"WARNING: TTS_SETTINGS_URL_{card} not set in .env")
 
     book_path_input = prompt("Path to EPUB/PDF: ")
     if not book_path_input:

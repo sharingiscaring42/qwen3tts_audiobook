@@ -1,6 +1,8 @@
-# Qwen3 TTS 1.7B Voice Cloning on Modal
+# Qwen3 Full TTS + ASR on Modal
 
-A production-ready voice cloning service using Qwen3-TTS 1.7B deployed on Modal's serverless cloud infrastructure.
+A production-ready Qwen3 speech service with one Modal app and two endpoints:
+- `POST /generate` for multi-mode TTS (`base_clone`, `custom_voice`, `voice_design`)
+- `POST /transcribe` for ASR (optional timestamp/alignment metadata)
 
 ## Install
 
@@ -37,11 +39,11 @@ modal setup
 # Or: python -m modal setup
 ```
 
-### 2. Download Model (One-time)
+### 2. Download Models (One-time)
 
 ```bash
-# Download Qwen3 TTS 1.7B model (~3-4GB) to Modal Volume
-modal run server/download_model.py
+# Download all TTS/ASR/aligner models to Modal Volume
+modal run server/download_model.py --task all
 ```
 
 ### 3. Deploy Server
@@ -56,13 +58,25 @@ modal deploy server/modal_server.py
 ### 3.5 Configure .env (required for clients)
 
 After deploy, Modal prints two URLs:
-- `Qwen3VoiceCloner.generate` → use this for `ENDPOINT_URL`
-- `Qwen3VoiceCloner.settings` → use this for `SETTING_URL`
+- `Qwen3TTSService.generate` → use this for TTS endpoint
+- `Qwen3ASRService.transcribe` → use this for ASR endpoint
 
 Create `.env` in repo root:
 ```bash
-ENDPOINT_URL=https://your-endpoint.modal.run
-SETTING_URL=https://your-endpoint.modal.run
+TTS_ENDPOINT_URL_A10=https://your-tts-endpoint-a10.modal.run
+TTS_ENDPOINT_URL_A100=https://your-tts-endpoint-a100.modal.run
+TTS_ENDPOINT_URL_H100=https://your-tts-endpoint-h100.modal.run
+ASR_ENDPOINT_URL_A10=https://your-asr-endpoint-a10.modal.run
+ASR_ENDPOINT_URL_A100=https://your-asr-endpoint-a100.modal.run
+ASR_ENDPOINT_URL_H100=https://your-asr-endpoint-h100.modal.run
+
+# Optional settings URLs
+TTS_SETTINGS_URL_A10=https://your-tts-settings-a10.modal.run
+TTS_SETTINGS_URL_A100=https://your-tts-settings-a100.modal.run
+TTS_SETTINGS_URL_H100=https://your-tts-settings-h100.modal.run
+ASR_SETTINGS_URL_A10=https://your-asr-settings-a10.modal.run
+ASR_SETTINGS_URL_A100=https://your-asr-settings-a100.modal.run
+ASR_SETTINGS_URL_H100=https://your-asr-settings-h100.modal.run
 ```
 
 
@@ -85,12 +99,16 @@ python client/client_editable.py
 
 ```
 .
-├── server/modal_server.py          # Main Modal app with TTS service
-├── server/download_model.py        # One-time model download script
+├── server/modal_server.py          # Deploy entrypoint (imports TTS + ASR classes)
+├── server/modal_app.py             # Shared Modal app/image/volume config
+├── server/modal_tts_server.py      # /generate endpoint + TTS model cache
+├── server/modal_asr_server.py      # /transcribe endpoint + ASR model cache
+├── server/download_model.py        # One-time model download script (tts|asr|aligner|all)
 ├── client/client.py                # CLI client (command-line arguments)
 ├── client/client_editable.py       # Editable client (edit in code)
 ├── client/client_batch_from_text.py# Batch client from text file
-├── client/client_batch_from_book.py# Batch client from EPUB/PDF
+├── client/client_batch_from_book.py# Batch client from EPUB/PDF (+ TTS mode/model flags)
+├── client/client_asr_from_audio.py # ASR CLI from local audio file
 ├── client/book_extract.py          # EPUB/PDF extractor + summary
 ├── client/book_audio_concat.py     # Concatenate/transcode audio chunks
 ├── input/                          # Text inputs

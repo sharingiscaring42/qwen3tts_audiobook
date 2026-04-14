@@ -35,9 +35,10 @@ def load_env(path: str = ".env") -> dict:
 _env = load_env()
 
 USE_LOCAL = False
+CARD = "A10"
 
 # Your Modal endpoint URL (get this from `modal deploy` output)
-ENDPOINT_URL = _env.get("ENDPOINT_URL", "https://your-endpoint.modal.run")
+ENDPOINT_URL = _env.get(f"TTS_ENDPOINT_URL_{CARD}", "https://your-endpoint.modal.run")
 LOCAL_ENDPOINT_URL = _env.get("LOCAL_ENDPOINT_URL", "http://localhost:8000/generate")
 ACTIVE_ENDPOINT_URL = LOCAL_ENDPOINT_URL if USE_LOCAL else ENDPOINT_URL
 

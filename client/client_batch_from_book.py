@@ -24,65 +24,35 @@ def load_env(path: str = ".env") -> dict:
             key, value = line.split("=", 1)
             data[key.strip()] = value.strip()
     return data
+
+
 _env = load_env()
 
-# A10 24GB   1/RTF 9x       Modal: 1.10$ -> 0.13 $/h        fal.ai:  N/A
-# A100 40GB  1/RTF 18x      Modal: 2.10$ -> 0.12 $/h        fal.ai:  0.99$ -> 0.055 $/h
-# H100 80GB  1/RTF 36x      Modal: 3.95$ -> 0.11 $/h        fal.ai:  1.89$ -> 0.0525 $/h
-# ============================================
-# CONFIG - EDIT THESE VALUES
-# ============================================
-
-CARD="A10"
+CARD = "A10"
 USE_LOCAL = False
 
 REFERENCE_AUDIO_PATH = "ref/jeff_hays_0/ref_audio.wav"
 REFERENCE_TEXT_PATH = "ref/jeff_hays_0/ref_text.txt"
 LANGUAGE = "English"
 
-# REFERENCE_AUDIO_PATH = "ref/herve_lacroix/ref_audio.wav"
-# REFERENCE_TEXT_PATH = "ref/herve_lacroix/ref_text.txt"
-# LANGUAGE = "French" 
-
 SETTINGS = {
     "A10": {
         "TARGET_SECONDS": 60,
         "CHARS_PER_SECOND": 15,
         "MAX_CHUNK_MULTIPLIER": 1.05,
-        "LANG":{
-            "English": {
-                "BATCH_SIZE": 20,
-            },
-            "French": {
-                "BATCH_SIZE": 17,
-            },
-        }
+        "LANG": {"English": {"BATCH_SIZE": 20}, "French": {"BATCH_SIZE": 17}},
     },
     "A100": {
         "TARGET_SECONDS": 30,
         "CHARS_PER_SECOND": 15,
         "MAX_CHUNK_MULTIPLIER": 1.05,
-        "LANG":{
-            "English": {
-                "BATCH_SIZE": 56,
-            },
-            "French": {
-                "BATCH_SIZE": 28,
-            },
-        }
+        "LANG": {"English": {"BATCH_SIZE": 56}, "French": {"BATCH_SIZE": 28}},
     },
     "H100": {
         "TARGET_SECONDS": 60,
         "CHARS_PER_SECOND": 15,
         "MAX_CHUNK_MULTIPLIER": 1.05,
-        "LANG":{
-            "English": {
-                "BATCH_SIZE": 64,
-            },
-            "French": {
-                "BATCH_SIZE": 56,
-            },
-        }
+        "LANG": {"English": {"BATCH_SIZE": 64}, "French": {"BATCH_SIZE": 56}},
     },
 }
 
@@ -91,32 +61,33 @@ CHARS_PER_SECOND = SETTINGS[CARD]["CHARS_PER_SECOND"]
 MAX_CHUNK_MULTIPLIER = SETTINGS[CARD]["MAX_CHUNK_MULTIPLIER"]
 BATCH_SIZE = SETTINGS[CARD]["LANG"][LANGUAGE]["BATCH_SIZE"]
 
-# Cap generation length per request (hard cap on output length)
 MAX_NEW_TOKENS = 2048
-# Defer long generations for retry in later batches
 RETRY_ON_LONG_AUDIO = True
 MAX_AUDIO_SECONDS = 90
 RETRY_MAX_NEW_TOKENS = 1500
 RETRY_BATCH_SIZE = 8
 
-# Output directory and base filename
+DEFAULT_TTS_MODE = "base_clone"
+DEFAULT_TTS_MODEL = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+
 OUTPUT_DIR = "output/book"
-OUTPUT_BASENAME = "book"
 
-# Modal endpoint URL
-ENDPOINT_URL = _env.get(f"ENDPOINT_URL_{CARD}", "https://your-endpoint.modal.run")
-SETTING_URL = _env.get(f"SETTING_URL_{CARD}", ENDPOINT_URL)
 
-LOCAL_ENDPOINT_URL = _env.get("LOCAL_ENDPOINT_URL", "http://localhost:8000/generate")
-LOCAL_SETTING_URL = _env.get("LOCAL_SETTING_URL", "http://localhost:8000/settings")
+def resolve_endpoint(endpoint_override: str | None = None) -> str:
+    if endpoint_override:
+        return endpoint_override
+    if USE_LOCAL:
+        return _env.get("LOCAL_ENDPOINT_URL", "http://localhost:8000/generate")
+    key = f"TTS_ENDPOINT_URL_{CARD}"
+    value = _env.get(key, "").strip()
+    if not value:
+        raise RuntimeError(f"Missing {key} in .env")
+    return value
 
-if USE_LOCAL:
-    ENDPOINT_URL = LOCAL_ENDPOINT_URL
-    SETTING_URL = LOCAL_SETTING_URL
 
-# ============================================
-# END CONFIG
-# ============================================
+def resolve_settings_url(endpoint_url: str) -> str:
+    key = f"TTS_SETTINGS_URL_{CARD}"
+    return _env.get(key, endpoint_url).strip() or endpoint_url
 
 
 def read_audio_file(path: str) -> str:
@@ -129,26 +100,50 @@ def read_text_file(path: str) -> str:
         return f.read().strip()
 
 
-def settings_url(endpoint_url: str) -> str:
-    cleaned = endpoint_url.rstrip("/")
-    if "/" in cleaned and cleaned.rsplit("/", 1)[-1] in {"generate", "clone_voice"}:
-        return f"{cleaned.rsplit('/', 1)[0]}/settings"
-    return f"{cleaned}/settings"
-
-
-def fetch_server_settings(endpoint_url: str) -> dict:
-    url = endpoint_url
+def fetch_server_settings(url: str) -> dict:
     response = requests.get(url, timeout=60)
     response.raise_for_status()
     return response.json()
 
 
+def build_tts_payload(
+    *,
+    text,
+    language: str,
+    max_new_tokens: int,
+    tts_mode: str,
+    tts_model: str,
+    ref_audio_base64: str = "",
+    ref_text: str = "",
+    speaker: str = "",
+    prompt_instruct_text: str = "",
+    voice_design_prompt: str = "",
+) -> dict:
+    payload = {
+        "text": text,
+        "language": language,
+        "max_new_tokens": max_new_tokens,
+        "tts_mode": tts_mode,
+        "tts_model": tts_model,
+    }
+
+    if tts_mode == "base_clone":
+        payload["ref_audio_base64"] = ref_audio_base64
+        payload["ref_text"] = ref_text
+    elif tts_mode == "custom_voice":
+        payload["speaker"] = speaker
+        if prompt_instruct_text:
+            payload["prompt_instruct_text"] = prompt_instruct_text
+    elif tts_mode == "voice_design":
+        payload["prompt"] = voice_design_prompt
+
+    return payload
 
 
-def clone_voice_chunk(payload: dict) -> dict:
+def clone_voice_chunk(endpoint_url: str, payload: dict) -> dict:
     request_start = time.monotonic()
     response = requests.post(
-        ENDPOINT_URL,
+        endpoint_url,
         json=payload,
         timeout=900,
         headers={"Content-Type": "application/json"},
@@ -164,17 +159,23 @@ def main() -> int:
     parser.add_argument("--input", required=True)
     parser.add_argument("--start-chapter", type=int, default=1)
     parser.add_argument("--end-chapter", type=int)
+    parser.add_argument("--tts-mode", default=DEFAULT_TTS_MODE, choices=["base_clone", "custom_voice", "voice_design"])
+    parser.add_argument("--tts-model", default=DEFAULT_TTS_MODEL)
+    parser.add_argument("--speaker", default="")
+    parser.add_argument("--prompt-instruct-text", default="")
+    parser.add_argument("--voice-design-prompt", default="")
+    parser.add_argument("--endpoint-url", default="")
     args = parser.parse_args()
+
+    endpoint_url = resolve_endpoint(args.endpoint_url.strip() or None)
+    settings_url = resolve_settings_url(endpoint_url)
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     book_name = Path(args.input).stem
     base_output_dir = Path(OUTPUT_DIR) / book_name
     intermediary_dir = base_output_dir / "intermediary_audio"
-    final_dir = base_output_dir / "final_audio"
-    output_basename = book_name
     base_output_dir.mkdir(parents=True, exist_ok=True)
     intermediary_dir.mkdir(parents=True, exist_ok=True)
-    final_dir.mkdir(parents=True, exist_ok=True)
     Path("result").mkdir(exist_ok=True)
     log_path = Path("result") / f"run_settings_book_{timestamp}.txt"
     total_audio_seconds = 0.0
@@ -199,48 +200,37 @@ def main() -> int:
         try:
             print(f"Run timestamp: {timestamp}")
             print(f"Settings log: {log_path}")
-            print(f"Input file: {args.input}")
-            print()
+            print(f"Endpoint URL: {endpoint_url}")
+            print(f"Input file: {args.input}\n")
 
             print("Server settings:")
             try:
-                server_settings = fetch_server_settings(SETTING_URL)
+                server_settings = fetch_server_settings(settings_url)
                 for key, value in server_settings.items():
                     print(f"{key}: {value}")
             except requests.RequestException as exc:
-                print(f"ERROR: Failed to fetch server settings: {exc}")
+                print(f"WARN: Failed to fetch server settings: {exc}")
             print()
 
-            print("Client settings:")
-            print(f"LANGUAGE = {LANGUAGE}")
-            print(f"TARGET_SECONDS = {TARGET_SECONDS}")
-            print(f"CHARS_PER_SECOND = {CHARS_PER_SECOND}")
-            print(f"MAX_CHUNK_MULTIPLIER = {MAX_CHUNK_MULTIPLIER}")
-            print(f"BATCH_SIZE = {BATCH_SIZE}")
-            print(f"MAX_NEW_TOKENS = {MAX_NEW_TOKENS}")
-            print(f"RETRY_ON_LONG_AUDIO = {RETRY_ON_LONG_AUDIO}")
-            print(f"MAX_AUDIO_SECONDS = {MAX_AUDIO_SECONDS}")
-            print(f"RETRY_MAX_NEW_TOKENS = {RETRY_MAX_NEW_TOKENS}")
-            print(f"RETRY_BATCH_SIZE = {RETRY_BATCH_SIZE}")
-            print()
-
-            audio_path = Path(REFERENCE_AUDIO_PATH)
-            if not audio_path.exists():
-                print(f"ERROR: Reference audio not found: {audio_path}")
+            ref_audio_base64 = ""
+            ref_text = ""
+            if args.tts_mode == "base_clone":
+                audio_path = Path(REFERENCE_AUDIO_PATH)
+                text_path = Path(REFERENCE_TEXT_PATH)
+                if not audio_path.exists():
+                    print(f"ERROR: Reference audio not found: {audio_path}")
+                    return 1
+                if not text_path.exists():
+                    print(f"ERROR: Reference text not found: {text_path}")
+                    return 1
+                ref_audio_base64 = read_audio_file(str(audio_path))
+                ref_text = read_text_file(str(text_path))
+            elif args.tts_mode == "custom_voice" and not args.speaker.strip():
+                print("ERROR: --speaker is required for --tts-mode custom_voice")
                 return 1
-
-            text_path = Path(REFERENCE_TEXT_PATH)
-            if not text_path.exists():
-                print(f"ERROR: Reference text not found: {text_path}")
+            elif args.tts_mode == "voice_design" and not args.voice_design_prompt.strip():
+                print("ERROR: --voice-design-prompt is required for --tts-mode voice_design")
                 return 1
-
-            print("Reading reference audio...")
-            ref_audio_base64 = read_audio_file(str(audio_path))
-            print(f"Audio encoded: {len(ref_audio_base64)} characters")
-
-            print("Reading reference text...")
-            ref_text = read_text_file(str(text_path))
-            print(f"Reference text length: {len(ref_text)} characters")
 
             print("Extracting book...")
             extract = extract_book(args.input)
@@ -248,200 +238,107 @@ def main() -> int:
             summary_path = base_output_dir / "summary.txt"
             write_extract_json(extract, str(extract_path))
             write_summary_txt(extract["chapters"], str(summary_path))
-            print(f"Extract saved: {extract_path}")
-            print(f"Summary saved: {summary_path}")
 
             chapters = extract["chapters"]
             start_index = max(1, args.start_chapter)
             end_index = args.end_chapter or len(chapters)
             end_index = min(end_index, len(chapters))
             selected = [c for c in chapters if start_index <= c["index"] <= end_index]
-
             if not selected:
                 print("ERROR: No chapters selected")
                 return 1
 
-            print(f"Selected chapters: {start_index}..{end_index} (total {len(selected)})")
-            intermediary_dir.mkdir(parents=True, exist_ok=True)
-
             chunks = []
             for chapter in selected:
-                chapter_chunks = split_text(chapter["text"], TARGET_SECONDS, CHARS_PER_SECOND)
-                chunks.extend(chapter_chunks)
-
+                chunks.extend(split_text(chapter["text"], TARGET_SECONDS, CHARS_PER_SECOND))
             print(f"Split into {len(chunks)} chunk(s)")
 
             def chunk_batches(items, size):
                 for i in range(0, len(items), size):
-                    yield items[i:i + size]
+                    yield items[i : i + size]
 
             chunk_index = 1
             retry_queue = []
-
             batches = list(chunk_batches(chunks, BATCH_SIZE))
-            last_batch = []
-            if batches:
-                last_batch = batches.pop()
+            last_batch = batches.pop() if batches else []
+
+            def submit_batch(batch_texts: list[str], token_cap: int, indices: list[int] | None = None):
+                nonlocal chunk_index, total_audio_seconds, total_processing_seconds
+                payload = build_tts_payload(
+                    text=batch_texts,
+                    language=LANGUAGE,
+                    max_new_tokens=token_cap,
+                    tts_mode=args.tts_mode,
+                    tts_model=args.tts_model,
+                    ref_audio_base64=ref_audio_base64,
+                    ref_text=ref_text,
+                    speaker=args.speaker,
+                    prompt_instruct_text=args.prompt_instruct_text,
+                    voice_design_prompt=args.voice_design_prompt,
+                )
+                result = clone_voice_chunk(endpoint_url, payload)
+                if not result.get("success", True):
+                    raise RuntimeError(result.get("error", "Unknown error"))
+
+                audio_base64s = result.get("audio_base64s")
+                durations = result.get("duration_seconds")
+                if not isinstance(audio_base64s, list) or not isinstance(durations, list):
+                    raise RuntimeError("Expected batch response with audio_base64s/duration_seconds")
+
+                processing_seconds = float(result.get("processing_seconds", 0.0))
+                total_processing_seconds += processing_seconds
+
+                batch_audio_used = 0.0
+                for i, (chunk_text, audio_b64, audio_seconds) in enumerate(zip(batch_texts, audio_base64s, durations)):
+                    idx = indices[i] if indices else chunk_index
+                    audio_seconds = float(audio_seconds)
+                    if (
+                        RETRY_ON_LONG_AUDIO
+                        and indices is None
+                        and audio_seconds > MAX_AUDIO_SECONDS
+                    ):
+                        retry_queue.append((idx, chunk_text))
+                    else:
+                        output_file = intermediary_dir / f"{book_name}_{idx}.wav"
+                        with open(output_file, "wb") as f:
+                            f.write(base64.b64decode(audio_b64))
+                        batch_audio_used += audio_seconds
+                    if indices is None:
+                        chunk_index += 1
+
+                total_audio_seconds += batch_audio_used
 
             for batch in batches:
-                print("-" * 60)
-                total_chars = sum(len(item) for item in batch)
-                max_chars = max(len(item) for item in batch)
-                print(f"Batch size: {len(batch)}")
-                print(f"Batch total chars: {total_chars}")
-                print(f"Batch max chars: {max_chars}")
+                submit_batch(batch, MAX_NEW_TOKENS)
 
-                payload = {
-                    "text": batch,
-                    "ref_audio_base64": ref_audio_base64,
-                    "ref_text": ref_text,
-                    "language": LANGUAGE,
-                    "max_new_tokens": MAX_NEW_TOKENS,
-                }
-
-                try:
-                    result = clone_voice_chunk(payload)
-                except requests.exceptions.Timeout:
-                    print("ERROR: Request timed out.")
-                    return 1
-                except requests.exceptions.ConnectionError:
-                    print(f"ERROR: Cannot connect to endpoint: {ENDPOINT_URL}")
-                    return 1
-                except requests.exceptions.HTTPError as e:
-                    print(f"ERROR: Server error: {e.response.status_code}")
-                    print(f"Response: {e.response.text}")
-                    return 1
-
-                if not result.get("success", True):
-                    print(f"ERROR: Server processing failed: {result.get('error', 'Unknown error')}")
-                    return 1
-
-                audio_base64s = result.get("audio_base64s")
-                durations = result.get("duration_seconds")
-                processing_seconds = float(result.get("processing_seconds", 0.0))
-                timing_breakdown = result.get("timing_breakdown")
-                gpu_memory = result.get("gpu_memory")
-
-                if not isinstance(audio_base64s, list) or not isinstance(durations, list):
-                    print("ERROR: Expected batch response with audio_base64s and duration_seconds list")
-                    return 1
-
-                batch_audio_used = 0.0
-                total_processing_seconds += processing_seconds
-
-                for chunk_text, audio_b64, audio_seconds in zip(batch, audio_base64s, durations):
-                    audio_seconds = float(audio_seconds)
-                    if RETRY_ON_LONG_AUDIO and audio_seconds > MAX_AUDIO_SECONDS:
-                        print(
-                            f"Chunk {chunk_index}/{len(chunks)} | chars={len(chunk_text)} | "
-                            f"audio={audio_seconds:.2f}s | deferred retry"
-                        )
-                        retry_queue.append((chunk_index, chunk_text))
-                    else:
-                        output_file = intermediary_dir / f"{output_basename}_{chunk_index}.wav"
-                        audio_data = base64.b64decode(audio_b64)
-                        with open(output_file, "wb") as f:
-                            f.write(audio_data)
-                        print(
-                            f"Chunk {chunk_index}/{len(chunks)} | chars={len(chunk_text)} | "
-                            f"audio={audio_seconds:.2f}s | saved={output_file}"
-                        )
-                        batch_audio_used += audio_seconds
-                    chunk_index += 1
-
-                total_audio_seconds += batch_audio_used
-                rtf = processing_seconds / batch_audio_used if batch_audio_used > 0 else 0.0
-                inv_rtf = batch_audio_used / processing_seconds if processing_seconds > 0 else 0.0
-                print(f"Batch processing time: {processing_seconds:.2f} seconds")
-                print(f"Batch RTF (processing/audio): {rtf:.3f}")
-                print(f"Batch 1/RTF (audio/processing): {inv_rtf:.3f}x")
-                if timing_breakdown:
-                    print(
-                        "Timing breakdown: "
-                        f"prompt={timing_breakdown.get('prompt_seconds', 0.0):.2f}s, "
-                        f"generate={timing_breakdown.get('generate_seconds', 0.0):.2f}s, "
-                        f"encode={timing_breakdown.get('encode_seconds', 0.0):.2f}s"
-                    )
-                if gpu_memory:
-                    print(
-                        "GPU memory: "
-                        f"allocated={gpu_memory.get('allocated_gb', 0.0):.2f} GB, "
-                        f"reserved={gpu_memory.get('reserved_gb', 0.0):.2f} GB"
-                    )
-
-            if last_batch or retry_queue:
-                combined = []
-                if last_batch:
-                    combined.extend([(i + 1, txt) for i, txt in enumerate(last_batch, start=chunk_index - len(last_batch))])
-                combined.extend(retry_queue)
-
-                combined_texts = [item[1] for item in combined]
-                combined_indices = [item[0] for item in combined]
-
-                print("-" * 60)
-                total_chars = sum(len(item[1]) for item in combined)
-                max_chars = max(len(item[1]) for item in combined)
-                print(f"Batch size: {len(combined)}")
-                print(f"Batch total chars: {total_chars}")
-                print(f"Batch max chars: {max_chars}")
-                if retry_queue:
-                    print("Last batch includes deferred retries")
-
-                payload = {
-                    "text": combined_texts,
-                    "ref_audio_base64": ref_audio_base64,
-                    "ref_text": ref_text,
-                    "language": LANGUAGE,
-                    "max_new_tokens": RETRY_MAX_NEW_TOKENS,
-                }
-
-                try:
-                    result = clone_voice_chunk(payload)
-                except requests.exceptions.RequestException as e:
-                    print(f"Final batch failed: {e}")
-                    return 1
-
-                if not result.get("success", True):
-                    print(f"Final batch failed: {result.get('error', 'Unknown error')}")
-                    return 1
-
-                audio_base64s = result.get("audio_base64s")
-                durations = result.get("duration_seconds")
-                processing_seconds = float(result.get("processing_seconds", 0.0))
-                timing_breakdown = result.get("timing_breakdown")
-                gpu_memory = result.get("gpu_memory")
-
-                if not isinstance(audio_base64s, list) or not isinstance(durations, list):
-                    print("ERROR: Expected batch response with audio_base64s and duration_seconds list")
-                    return 1
-
-                batch_audio_used = 0.0
-                total_processing_seconds += processing_seconds
-
-                for idx, audio_b64, audio_seconds, text_item in zip(combined_indices, audio_base64s, durations, combined_texts):
-                    audio_seconds = float(audio_seconds)
-                    output_file = intermediary_dir / f"{output_basename}_{idx}.wav"
-                    audio_data = base64.b64decode(audio_b64)
-                    with open(output_file, "wb") as f:
-                        f.write(audio_data)
-                    print(
-                        f"Chunk {idx}/{len(chunks)} | chars={len(text_item)} | "
-                        f"audio={audio_seconds:.2f}s | saved={output_file}"
-                    )
-                    batch_audio_used += audio_seconds
-
-                total_audio_seconds += batch_audio_used
-                rtf = processing_seconds / batch_audio_used if batch_audio_used > 0 else 0.0
-                inv_rtf = batch_audio_used / processing_seconds if processing_seconds > 0 else 0.0
-                print(f"Batch processing time: {processing_seconds:.2f} seconds")
-                print(f"Batch RTF (processing/audio): {rtf:.3f}")
-                print(f"Batch 1/RTF (audio/processing): {inv_rtf:.3f}x")
+            combined = []
+            if last_batch:
+                start_idx = chunk_index
+                combined.extend([(start_idx + i, txt) for i, txt in enumerate(last_batch)])
+            combined.extend(retry_queue)
+            if combined:
+                submit_batch(
+                    [txt for _, txt in combined],
+                    RETRY_MAX_NEW_TOKENS,
+                    indices=[idx for idx, _ in combined],
+                )
+        except requests.exceptions.Timeout:
+            print("ERROR: Request timed out")
+            return 1
+        except requests.exceptions.ConnectionError:
+            print(f"ERROR: Cannot connect to endpoint: {endpoint_url}")
+            return 1
+        except requests.exceptions.HTTPError as exc:
+            print(f"ERROR: Server error {exc.response.status_code}: {exc.response.text}")
+            return 1
+        except Exception as exc:
+            print(f"ERROR: {exc}")
+            return 1
         finally:
             print("=" * 60)
             print("TOTAL SUMMARY")
             print(f"Total audio generated: {total_audio_seconds:.2f} seconds")
             print(f"Total processing time: {total_processing_seconds:.2f} seconds")
-
             avg_rtf = total_processing_seconds / total_audio_seconds if total_audio_seconds > 0 else 0.0
             avg_inv_rtf = total_audio_seconds / total_processing_seconds if total_processing_seconds > 0 else 0.0
             print(f"Average RTF (processing/audio): {avg_rtf:.3f}")

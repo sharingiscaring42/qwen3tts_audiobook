@@ -36,8 +36,9 @@ def load_env(path: str = ".env") -> dict:
 _env = load_env()
 
 USE_LOCAL = False
+CARD = "A10"
 
-DEFAULT_ENDPOINT = _env.get("ENDPOINT_URL", "https://your-endpoint.modal.run")
+DEFAULT_ENDPOINT = _env.get(f"TTS_ENDPOINT_URL_{CARD}", "https://your-endpoint.modal.run")
 LOCAL_ENDPOINT = _env.get("LOCAL_ENDPOINT_URL", "http://localhost:8000/generate")
 ACTIVE_ENDPOINT = LOCAL_ENDPOINT if USE_LOCAL else DEFAULT_ENDPOINT
 
@@ -183,14 +184,18 @@ Examples:
     parser.add_argument("text", nargs="?", help="Text to synthesize into speech")
     parser.add_argument("-a", "--audio", dest="reference_audio", help="Path to reference audio file (WAV)")
     parser.add_argument("-t", "--text", dest="reference_text", help="Transcript of reference audio")
-    parser.add_argument("-e", "--endpoint", default=ACTIVE_ENDPOINT, help="Endpoint URL")
+    parser.add_argument("--card", default=CARD, choices=["A10", "A100", "H100"], help="GPU card key suffix for .env")
+    parser.add_argument("-e", "--endpoint", default="", help="Endpoint URL override")
     parser.add_argument("-o", "--output", help="Output audio file path (default: output_TIMESTAMP.wav)")
     parser.add_argument("--health", action="store_true", help="Check service health")
     parser.add_argument("-q", "--quiet", action="store_true", help="Suppress progress messages")
     
     args = parser.parse_args()
     
-    endpoint_url = args.endpoint
+    endpoint_url = (args.endpoint or "").strip() or _env.get(
+        f"TTS_ENDPOINT_URL_{args.card}",
+        ACTIVE_ENDPOINT,
+    )
 
     # Health check mode
     if args.health:
